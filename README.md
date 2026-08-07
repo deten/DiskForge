@@ -3,10 +3,7 @@
 A native Windows disk and partition suite: inspect drives, create and delete partitions, format to
 Windows *and Linux* filesystems, and clone disks with verified copies.
 
-DiskForge is built around one idea: a tool that can destroy a drive should be able to tell you exactly
-what it is about to do, and prove afterwards that it did it. Every operation runs the same
-Validate, Simulate, Execute, Verify pipeline, and destructive work is staged into a batch you review
-before anything is written.
+DiskForge is built around having a free reliable partition manager that can destroy, create and rewrite drives as needed.
 
 ## What it does today
 
