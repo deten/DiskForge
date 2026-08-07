@@ -1,0 +1,52 @@
+## Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+build/
+
+## .NET / Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+project.lock.json
+artifacts/
+
+## Rider / VS Code
+.idea/
+.vscode/
+
+## Logs & test results
+*.log
+[Tt]est[Rr]esult*/
+*.coverage
+*.trx
+
+## OS
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+## DiskForge working files
+*.vhdx
+*.dfmeta
+
+## Published self-contained binaries (~105 MB, rebuilt by build-exe.ps1)
+dist/
+
+## Scratchpad: keep the tooling scripts, drop run artifacts. Those outputs capture the local
+## machine name, disk serial numbers and user paths, which have no business in a public repo.
+scratchpad/*.txt
+scratchpad/jobs/
+scratchpad/jobs-done/
+
+# Terminal Paste Image folder
+.cp-images/
+
+## Internal working documents (kept local)
+CLAUDE.md
+CLAUDE_CODE_PROMPT.md
+RUNNING_NOTES.md

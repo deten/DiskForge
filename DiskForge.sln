@@ -1,0 +1,57 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{1B5137C0-E96E-4AA6-B0E8-A2B13A8F37E9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DiskForge.Core", "src\DiskForge.Core\DiskForge.Core.csproj", "{B105B6B4-8957-4AAF-A8AA-6374E1E47546}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DiskForge.Engine", "src\DiskForge.Engine\DiskForge.Engine.csproj", "{BA196337-AE0F-4B59-B266-F20EAB7F9713}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DiskForge.Cli", "src\DiskForge.Cli\DiskForge.Cli.csproj", "{1207B911-3DF3-4818-BC91-90F206E7924D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DiskForge.App", "src\DiskForge.App\DiskForge.App.csproj", "{25A2A424-58D2-463E-AE5D-0B1D16CD5713}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{F3E2AE69-6321-46BD-9887-9DE5C05EC302}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DiskForge.Engine.Tests", "tests\DiskForge.Engine.Tests\DiskForge.Engine.Tests.csproj", "{F8092EB1-3B4F-4B14-99C0-64BD41E9D44D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B105B6B4-8957-4AAF-A8AA-6374E1E47546}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B105B6B4-8957-4AAF-A8AA-6374E1E47546}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B105B6B4-8957-4AAF-A8AA-6374E1E47546}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B105B6B4-8957-4AAF-A8AA-6374E1E47546}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BA196337-AE0F-4B59-B266-F20EAB7F9713}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BA196337-AE0F-4B59-B266-F20EAB7F9713}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BA196337-AE0F-4B59-B266-F20EAB7F9713}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BA196337-AE0F-4B59-B266-F20EAB7F9713}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1207B911-3DF3-4818-BC91-90F206E7924D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1207B911-3DF3-4818-BC91-90F206E7924D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1207B911-3DF3-4818-BC91-90F206E7924D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1207B911-3DF3-4818-BC91-90F206E7924D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{25A2A424-58D2-463E-AE5D-0B1D16CD5713}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{25A2A424-58D2-463E-AE5D-0B1D16CD5713}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{25A2A424-58D2-463E-AE5D-0B1D16CD5713}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{25A2A424-58D2-463E-AE5D-0B1D16CD5713}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F8092EB1-3B4F-4B14-99C0-64BD41E9D44D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F8092EB1-3B4F-4B14-99C0-64BD41E9D44D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F8092EB1-3B4F-4B14-99C0-64BD41E9D44D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F8092EB1-3B4F-4B14-99C0-64BD41E9D44D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{B105B6B4-8957-4AAF-A8AA-6374E1E47546} = {1B5137C0-E96E-4AA6-B0E8-A2B13A8F37E9}
+		{BA196337-AE0F-4B59-B266-F20EAB7F9713} = {1B5137C0-E96E-4AA6-B0E8-A2B13A8F37E9}
+		{1207B911-3DF3-4818-BC91-90F206E7924D} = {1B5137C0-E96E-4AA6-B0E8-A2B13A8F37E9}
+		{25A2A424-58D2-463E-AE5D-0B1D16CD5713} = {1B5137C0-E96E-4AA6-B0E8-A2B13A8F37E9}
+		{F8092EB1-3B4F-4B14-99C0-64BD41E9D44D} = {F3E2AE69-6321-46BD-9887-9DE5C05EC302}
+	EndGlobalSection
+EndGlobal

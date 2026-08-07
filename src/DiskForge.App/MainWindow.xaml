@@ -1,0 +1,126 @@
+<ui:FluentWindow x:Class="DiskForge.App.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+                 xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                 mc:Ignorable="d"
+                 Title="DiskForge" Height="760" Width="1180"
+                 MinHeight="560" MinWidth="900"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="DiskForge" Icon="{ui:SymbolIcon HardDrive24}" />
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Navigation rail -->
+            <Border Grid.Column="0" Background="#0AFFFFFF" Padding="12,8">
+                <StackPanel>
+                    <TextBlock Text="DiskForge" FontSize="18" FontWeight="Bold" Margin="8,8,0,2" />
+                    <TextBlock Text="Disk &amp; Partition Suite" FontSize="11" Opacity="0.55" Margin="8,0,0,16" />
+
+                    <!-- Active -->
+                    <RadioButton x:Name="DashboardNav" GroupName="Nav" IsChecked="True" Style="{DynamicResource NavItemStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="DataBarHorizontal24" VerticalAlignment="Center" />
+                            <TextBlock Text="Dashboard" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+
+                    <!-- Clone: implemented. Opens the clone flow (source → target → verify). -->
+                    <RadioButton x:Name="CloneNav" GroupName="Nav" Style="{DynamicResource NavItemStyle}"
+                                 Click="CloneNav_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="Copy24" VerticalAlignment="Center" />
+                            <TextBlock Text="Clone" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+
+                    <!-- Coming soon (disabled, badged) -->
+                    <RadioButton GroupName="Nav" IsEnabled="False" Style="{DynamicResource NavItemStyle}">
+                        <Grid Width="180">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Save24" VerticalAlignment="Center" />
+                                <TextBlock Text="Image &amp; Restore" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Border HorizontalAlignment="Right" Background="#22FFFFFF" CornerRadius="4" Padding="5,1">
+                                <TextBlock Text="Soon" FontSize="9" Opacity="0.8" />
+                            </Border>
+                        </Grid>
+                    </RadioButton>
+                    <RadioButton GroupName="Nav" IsEnabled="False" Style="{DynamicResource NavItemStyle}">
+                        <Grid Width="180">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="ArrowSwap24" VerticalAlignment="Center" />
+                                <TextBlock Text="Convert" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Border HorizontalAlignment="Right" Background="#22FFFFFF" CornerRadius="4" Padding="5,1">
+                                <TextBlock Text="Soon" FontSize="9" Opacity="0.8" />
+                            </Border>
+                        </Grid>
+                    </RadioButton>
+                    <RadioButton GroupName="Nav" IsEnabled="False" Style="{DynamicResource NavItemStyle}">
+                        <Grid Width="180">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Wrench24" VerticalAlignment="Center" />
+                                <TextBlock Text="Tools" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Border HorizontalAlignment="Right" Background="#22FFFFFF" CornerRadius="4" Padding="5,1">
+                                <TextBlock Text="Soon" FontSize="9" Opacity="0.8" />
+                            </Border>
+                        </Grid>
+                    </RadioButton>
+
+                    <TextBlock Text="Dashboard · Clone enabled" FontSize="10" Opacity="0.4"
+                               VerticalAlignment="Bottom" Margin="8,24,0,4" />
+                </StackPanel>
+            </Border>
+
+            <!-- Content host -->
+            <ContentControl Grid.Column="1" x:Name="ContentHost" />
+        </Grid>
+    </Grid>
+
+    <ui:FluentWindow.Resources>
+        <Style x:Key="NavItemStyle" TargetType="RadioButton">
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Bd" CornerRadius="6" Padding="{TemplateBinding Padding}"
+                                Background="Transparent">
+                            <ContentPresenter VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#223B82F6" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#14FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </ui:FluentWindow.Resources>
+</ui:FluentWindow>

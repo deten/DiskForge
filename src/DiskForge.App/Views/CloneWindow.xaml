@@ -1,0 +1,95 @@
+<ui:FluentWindow x:Class="DiskForge.App.Views.CloneWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:conv="clr-namespace:DiskForge.App.Converters"
+                 xmlns:vm="clr-namespace:DiskForge.App.ViewModels"
+                 xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+                 xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                 mc:Ignorable="d"
+                 d:DataContext="{d:DesignInstance vm:CloneDialogViewModel}"
+                 Title="Clone disk" Height="720" Width="600"
+                 WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+                 ExtendsContentIntoTitleBar="True" WindowBackdropType="Mica">
+
+    <ui:FluentWindow.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <conv:BoolToVisibilityConverter x:Key="BoolToVisInverse" Invert="True" />
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Clone disk" />
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,8,24,8">
+            <StackPanel>
+                <TextBlock Text="Clone a disk" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="Copies one disk onto another, with a full read-back verification."
+                           Opacity="0.7" Margin="0,4,0,0" TextWrapping="Wrap" />
+
+                <TextBlock Text="Source disk (copied FROM)" Margin="0,18,0,4" FontWeight="SemiBold" />
+                <ComboBox ItemsSource="{Binding Sources}" DisplayMemberPath="Display"
+                          SelectedItem="{Binding SelectedSource}" HorizontalAlignment="Stretch" />
+
+                <TextBlock Text="Target disk (will be ERASED)" Margin="0,18,0,4" FontWeight="SemiBold" />
+                <ComboBox ItemsSource="{Binding Targets}" DisplayMemberPath="Display"
+                          SelectedItem="{Binding SelectedTarget}" HorizontalAlignment="Stretch" />
+                <TextBlock Text="No eligible target disk is connected (need another non-system disk)."
+                           Foreground="#FCA5A5" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                           Visibility="{Binding NoTargets, Converter={StaticResource BoolToVis}}" />
+
+                <!-- Internal-target override -->
+                <Border Margin="0,14,0,0" CornerRadius="8" Padding="12,10"
+                        Background="#26EF4444" BorderBrush="#66EF4444" BorderThickness="1"
+                        Visibility="{Binding TargetIsInternal, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Text="⚠ The target is an INTERNAL, non-removable disk." Foreground="#FCA5A5" FontWeight="SemiBold" />
+                        <CheckBox Content="I understand — allow overwriting this internal disk"
+                                  IsChecked="{Binding AllowNonRemovableTarget}" Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="Method" Margin="0,16,0,4" FontWeight="SemiBold" />
+                <ComboBox ItemsSource="{Binding Methods}" DisplayMemberPath="Display"
+                          SelectedValuePath="Value" SelectedValue="{Binding SelectedMethod}"
+                          HorizontalAlignment="Stretch" />
+
+                <CheckBox Content="Regenerate disk identity on the clone (avoid GPT collision with the source)"
+                          IsChecked="{Binding RegenerateIdentity}" Margin="0,16,0,0" />
+                <CheckBox Content="Rebuild boot files if the source is self-contained bootable (bcdboot)"
+                          IsChecked="{Binding MakeBootable}" Margin="0,8,0,0" />
+                <CheckBox Content="Verify after copy (re-read the target and compare SHA-256)"
+                          IsChecked="{Binding VerifyAfter}" Margin="0,8,0,0" />
+                <CheckBox Content="Source is in use — allow a crash-consistent copy (no VSS snapshot yet)"
+                          IsChecked="{Binding AllowLiveCrashConsistent}" Margin="0,8,0,0" />
+
+                <Border Margin="0,18,0,0" CornerRadius="8" Padding="14,12" Background="#0DFFFFFF"
+                        BorderBrush="#1FFFFFFF" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock Text="What will happen" FontWeight="SemiBold" Opacity="0.8" Margin="0,0,0,6" />
+                        <TextBlock Text="{Binding SimulationText}" TextWrapping="Wrap" FontSize="13" LineHeight="20" />
+                    </StackPanel>
+                </Border>
+
+                <Border Margin="0,12,0,0" CornerRadius="8" Padding="14,12"
+                        Background="#26EF4444" BorderBrush="#66EF4444" BorderThickness="1"
+                        Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding ValidationText}" Foreground="#FCA5A5" TextWrapping="Wrap" FontSize="13" />
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Background="#0AFFFFFF" Padding="24,14">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <ui:Button x:Name="CancelButton" Content="Cancel" MinWidth="90" Click="Cancel_Click" />
+                <ui:Button x:Name="AddButton" Content="Add to plan" Appearance="Primary" MinWidth="120"
+                           Margin="10,0,0,0" IsEnabled="{Binding CanConfirm}" Click="Add_Click" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</ui:FluentWindow>

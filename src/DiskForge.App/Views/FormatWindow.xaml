@@ -1,0 +1,130 @@
+<ui:FluentWindow x:Class="DiskForge.App.Views.FormatWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:conv="clr-namespace:DiskForge.App.Converters"
+                 xmlns:vm="clr-namespace:DiskForge.App.ViewModels"
+                 xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+                 xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                 mc:Ignorable="d"
+                 d:DataContext="{d:DesignInstance vm:FormatDialogViewModel}"
+                 Title="Format" Height="640" Width="560"
+                 WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+                 ExtendsContentIntoTitleBar="True" WindowBackdropType="Mica">
+
+    <ui:FluentWindow.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <conv:BoolToVisibilityConverter x:Key="BoolToVisInverse" Invert="True" />
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Format volume" />
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,8,24,8">
+            <StackPanel>
+                <TextBlock Text="{Binding DiskHeader}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding DiskIdentity}" Opacity="0.7" Margin="0,4,0,0" TextWrapping="Wrap" />
+
+                <!-- Internal-disk override -->
+                <Border Margin="0,14,0,0" CornerRadius="8" Padding="12,10"
+                        Background="#26EF4444" BorderBrush="#66EF4444" BorderThickness="1"
+                        Visibility="{Binding DiskIsRemovable, Converter={StaticResource BoolToVisInverse}}">
+                    <StackPanel>
+                        <TextBlock Text="⚠ This is an INTERNAL, non-removable disk." Foreground="#FCA5A5" FontWeight="SemiBold" />
+                        <CheckBox Content="I understand — allow formatting this internal disk"
+                                  IsChecked="{Binding AllowNonRemovable}" Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="Scope" Margin="0,18,0,4" FontWeight="SemiBold" />
+                <ComboBox ItemsSource="{Binding ScopeOptions}" DisplayMemberPath="Display"
+                          SelectedValuePath="IsCleanWholeDisk" SelectedValue="{Binding IsCleanWholeDisk}"
+                          HorizontalAlignment="Stretch" />
+
+                <StackPanel Visibility="{Binding IsCleanWholeDisk, Converter={StaticResource BoolToVisInverse}}">
+                    <TextBlock Text="Partition" Margin="0,14,0,4" FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding Partitions}" DisplayMemberPath="Display"
+                              SelectedItem="{Binding SelectedPartition}" HorizontalAlignment="Stretch" />
+                    <TextBlock Text="No eligible partitions on this disk — choose 'Clean the whole disk' instead."
+                               Foreground="#FCA5A5" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Visibility="{Binding NoEligiblePartitions, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+
+                <!-- Partition table. Only offered when the disk is being erased anyway — there is no
+                     non-destructive MBR↔GPT conversion here and the wording must not imply one. -->
+                <StackPanel Visibility="{Binding CanChooseScheme, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="Partition table" Margin="0,14,0,4" FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding SchemeOptions}" DisplayMemberPath="Display"
+                              SelectedValuePath="Scheme" SelectedValue="{Binding SelectedScheme}"
+                              HorizontalAlignment="Stretch" />
+                    <TextBlock Opacity="0.6" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"
+                               Text="The disk is being erased, so its partition table is rewritten from scratch. This does not convert anything — nothing on the disk survives either way." />
+                </StackPanel>
+
+                <TextBlock Text="File system" Margin="0,14,0,4" FontWeight="SemiBold" />
+                <ComboBox ItemsSource="{Binding FileSystemOptions}" DisplayMemberPath="Display"
+                          SelectedValuePath="Value" SelectedValue="{Binding SelectedFileSystem}"
+                          HorizontalAlignment="Stretch">
+                    <!-- Unavailable Linux filesystems stay visible but disabled, with the reason
+                         (and the fix) in the tooltip. -->
+                    <ComboBox.ItemContainerStyle>
+                        <Style TargetType="ComboBoxItem">
+                            <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
+                            <Setter Property="ToolTip" Value="{Binding Reason}" />
+                        </Style>
+                    </ComboBox.ItemContainerStyle>
+                </ComboBox>
+                <TextBlock Text="{Binding LinuxBackendText}" Opacity="0.6" FontSize="12"
+                           TextWrapping="Wrap" Margin="0,6,0,0" />
+
+                <Border Margin="0,12,0,0" CornerRadius="8" Padding="12,10"
+                        Background="#264F46E5" BorderBrush="#666366F1" BorderThickness="1"
+                        Visibility="{Binding IsLinuxFileSystem, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Text="Linux filesystem" FontWeight="SemiBold" Foreground="#C7D2FE" />
+                        <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" FontSize="12" Opacity="0.9"
+                                   Text="Written by the real mkfs tools inside WSL2. Windows has no driver for it, so
+                                         Explorer and Disk Management will show this volume as unformatted (RAW) —
+                                         that is expected. The partition is tagged as Linux filesystem data and gets
+                                         no drive letter, so Windows will not offer to reformat it." />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="Volume label" Margin="0,14,0,4" FontWeight="SemiBold" />
+                <ui:TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}"
+                            MaxLength="{Binding LabelMaxLength}" />
+
+                <CheckBox Content="{Binding FullFormatText}" IsChecked="{Binding FullFormat}"
+                          Margin="0,14,0,0" />
+
+                <Border Margin="0,18,0,0" CornerRadius="8" Padding="14,12" Background="#0DFFFFFF"
+                        BorderBrush="#1FFFFFFF" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock Text="What will happen" FontWeight="SemiBold" Opacity="0.8" Margin="0,0,0,6" />
+                        <TextBlock Text="{Binding SimulationText}" TextWrapping="Wrap" FontSize="13" LineHeight="20" />
+                    </StackPanel>
+                </Border>
+
+                <Border Margin="0,12,0,0" CornerRadius="8" Padding="14,12"
+                        Background="#26EF4444" BorderBrush="#66EF4444" BorderThickness="1"
+                        Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding ValidationText}" Foreground="#FCA5A5" TextWrapping="Wrap" FontSize="13" />
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Background="#0AFFFFFF" Padding="24,14">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <ui:Button x:Name="CancelButton" Content="Cancel" MinWidth="90" Click="Cancel_Click" />
+                <ui:Button x:Name="AddButton" Content="Add to plan" Appearance="Primary" MinWidth="120"
+                           Margin="10,0,0,0" IsEnabled="{Binding CanConfirm}" Click="Add_Click" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</ui:FluentWindow>
