@@ -61,10 +61,83 @@ public class ExtResizerTests
         finally { File.Delete(path); }
     }
 
+    // ---------------------------------------------------------------- shrinking
+
+    [RequiresWslOracleTheory]
+    [InlineData(FileSystemType.Ext2)]
+    [InlineData(FileSystemType.Ext3)]
+    [InlineData(FileSystemType.Ext4)]
+    public void Shrunk_FilesystemIsCleanPerE2fsck(FileSystemType fs)
+        => AssertShrinksClean(512 * MB, 256 * MB, fs);
+
+    /// <summary>Cutting inside the final group, so no group is removed and only its tail changes.</summary>
+    [RequiresWslOracleFact]
+    public void ShrinkingWithinTheFinalGroup_IsClean()
+        => AssertShrinksClean(200 * MB, 180 * MB, FileSystemType.Ext4);
+
+    /// <summary>Grow then shrink back, to prove the two directions agree about the same geometry.</summary>
+    [RequiresWslOracleFact]
+    public void GrowThenShrinkBack_IsClean()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"diskforge-roundtrip-{Guid.NewGuid():N}.img");
+        try
+        {
+            var layout = ExtLayout.Compute(128 * MB, FileSystemType.Ext4);
+            var buffer = new byte[512 * MB];
+            using (var stream = new MemoryStream(buffer))
+            {
+                new ExtFormatter(layout, "ROUNDTRIP").Write(stream);
+
+                var grow = ExtResizer.TryPlanGrow(stream, 512 * MB, out var growReason);
+                Assert.True(grow is not null, $"grow refused: {growReason}");
+                ExtResizer.Grow(stream, grow!);
+
+                var shrink = ExtResizer.TryPlanShrink(stream, 128 * MB, out var shrinkReason);
+                Assert.True(shrink is not null, $"shrink refused: {shrinkReason}");
+                ExtResizer.Shrink(stream, shrink!);
+            }
+
+            File.WriteAllBytes(path, buffer);
+            var (exit, output) = RunInWslRaw("e2fsck", "-fn", ToWslPath(path));
+            Assert.True(exit == 0, $"e2fsck rejected the grown-then-shrunk image, exit {exit}:\n{output}");
+        }
+        finally { File.Delete(path); }
+    }
+
     // ---------------------------------------------------------------- refusals
 
+    /// <summary>
+    /// The safety property that makes this shrink implementation defensible: it only ever removes
+    /// space that is already free. Anything live above the new boundary has to be refused, because
+    /// relocating it means rewriting extent trees and renumbering inodes.
+    /// </summary>
+    [RequiresWslOracleFact]
+    public void ShrinkingOverLiveData_IsRefused()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"diskforge-shrinkbusy-{Guid.NewGuid():N}.img");
+        try
+        {
+            // Build a 256 MB filesystem and put a file near the end of it, using the oracle distro so
+            // the allocation is real rather than something this code arranged for itself.
+            File.WriteAllBytes(path, BuildImage(256 * MB, 256 * MB, FileSystemType.Ext4));
+            var wsl = ToWslPath(path);
+
+            var (mkdirExit, mkdirOut) = RunInWslRaw("sh", "-c",
+                $"mkdir -p /tmp/dfmnt && mount -o loop '{wsl}' /tmp/dfmnt && " +
+                "dd if=/dev/zero of=/tmp/dfmnt/big bs=1M count=200 2>/dev/null; sync; umount /tmp/dfmnt");
+            Assert.True(mkdirExit == 0, mkdirOut);
+
+            using var stream = File.OpenRead(path);
+            var plan = ExtResizer.TryPlanShrink(stream, 32 * MB, out var reason);
+
+            Assert.Null(plan);
+            Assert.Contains("not supported yet", reason);
+        }
+        finally { File.Delete(path); }
+    }
+
     [Fact]
-    public void Shrinking_IsRefusedWithAReason()
+    public void GrowPlanner_RefusesAShrink()
     {
         using var stream = new MemoryStream(BuildImage(128 * MB, 128 * MB, FileSystemType.Ext4));
 
@@ -72,6 +145,17 @@ public class ExtResizerTests
 
         Assert.Null(plan);
         Assert.Contains("Shrinking", reason);
+    }
+
+    [Fact]
+    public void ShrinkPlanner_RefusesAGrow()
+    {
+        using var stream = new MemoryStream(BuildImage(128 * MB, 128 * MB, FileSystemType.Ext4));
+
+        var plan = ExtResizer.TryPlanShrink(stream, 256 * MB, out var reason);
+
+        Assert.Null(plan);
+        Assert.Contains("not smaller", reason);
     }
 
     [Fact]
@@ -129,6 +213,32 @@ public class ExtResizerTests
 
             // e2fsck exits 0 on a clean filesystem; make sure it really saw the larger one.
             Assert.Contains("blocks", output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { File.Delete(path); }
+    }
+
+    private static void AssertShrinksClean(ulong fromBytes, ulong toBytes, FileSystemType fs)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"diskforge-shrink-{Guid.NewGuid():N}.img");
+        try
+        {
+            var layout = ExtLayout.Compute(fromBytes, fs);
+            var buffer = new byte[layout.SizeBytes];
+            using (var stream = new MemoryStream(buffer))
+            {
+                new ExtFormatter(layout, "SHRINKTEST").Write(stream);
+
+                var plan = ExtResizer.TryPlanShrink(stream, toBytes, out var reason);
+                Assert.True(plan is not null, $"shrink was refused: {reason}");
+                ExtResizer.Shrink(stream, plan!);
+            }
+
+            // Truncate to the new size, exactly as shrinking a partition would.
+            File.WriteAllBytes(path, buffer.AsSpan(0, (int)toBytes).ToArray());
+
+            var (exit, output) = RunInWslRaw("e2fsck", "-fn", ToWslPath(path));
+            Assert.True(exit == 0,
+                $"e2fsck rejected {fs} shrunk from {fromBytes / MB} MB to {toBytes / MB} MB, exit {exit}:\n{output}");
         }
         finally { File.Delete(path); }
     }

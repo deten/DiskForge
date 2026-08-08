@@ -17,6 +17,21 @@ public sealed record ExtGrowPlan
     public ulong NewSizeBytes => (ulong)NewTotalBlocks * BlockSize;
 }
 
+/// <summary>A shrink that needs no data relocation, because the region being cut away is already free.</summary>
+public sealed record ExtShrinkPlan
+{
+    public required uint BlockSize { get; init; }
+    public required uint OldTotalBlocks { get; init; }
+    public required uint NewTotalBlocks { get; init; }
+    public required uint OldGroupCount { get; init; }
+    public required uint NewGroupCount { get; init; }
+    public required uint RemovedFreeBlocks { get; init; }
+    public required uint RemovedInodes { get; init; }
+
+    public ulong OldSizeBytes => (ulong)OldTotalBlocks * BlockSize;
+    public ulong NewSizeBytes => (ulong)NewTotalBlocks * BlockSize;
+}
+
 /// <summary>
 /// Grows an existing ext2/ext3/ext4 filesystem in place, natively.
 ///
@@ -112,6 +127,241 @@ public static class ExtResizer
             AddedInodes = sb.InodesPerGroup * (newGroups - oldGroups)
         };
     }
+
+    /// <summary>
+    /// Works out whether the filesystem can be shrunk to <paramref name="newSizeBytes"/>.
+    ///
+    /// Only the case that needs <b>no data relocation</b> is supported: everything above the new
+    /// boundary must already be free. Moving live blocks down would mean rewriting extent trees,
+    /// indirect chains and directory contents, and removing whole groups would renumber inodes, which
+    /// is the part of resize2fs that eats filesystems. Refusing is the honest position until that is
+    /// built and heavily tested; a user who frees space or copies the data off can still shrink.
+    /// </summary>
+    public static ExtShrinkPlan? TryPlanShrink(Stream stream, ulong newSizeBytes, out string? blockedReason)
+    {
+        var sb = ReadSuperblock(stream);
+        if (sb is null)
+        {
+            blockedReason = "No ext filesystem was found here (its superblock magic is missing).";
+            return null;
+        }
+
+        if (UnsupportedLayout(sb) is { } unsupported)
+        {
+            blockedReason = unsupported;
+            return null;
+        }
+
+        var newTotalBlocks = (uint)Math.Min(newSizeBytes / sb.BlockSize, uint.MaxValue);
+        if (newTotalBlocks >= sb.TotalBlocks)
+        {
+            blockedReason = "That is not smaller than the filesystem already is.";
+            return null;
+        }
+
+        var oldGroups = GroupCount(sb.TotalBlocks, sb.FirstDataBlock, sb.BlocksPerGroup);
+        var newGroups = GroupCount(newTotalBlocks, sb.FirstDataBlock, sb.BlocksPerGroup);
+        if (newGroups == 0)
+        {
+            blockedReason = "That would leave no block groups at all.";
+            return null;
+        }
+
+        // The descriptor table must keep the same number of blocks, or every remaining group's
+        // metadata would have to move. Shrinking across that boundary is refused rather than attempted.
+        var newGdtBlocks = (newGroups * GroupDescriptorSize + sb.BlockSize - 1) / sb.BlockSize;
+        if (newGdtBlocks != sb.GroupDescriptorBlocks)
+        {
+            blockedReason =
+                "Shrinking this far would need a smaller group descriptor table, which would move " +
+                "every block group's metadata. That is not supported.";
+            return null;
+        }
+
+        if (LayoutMismatch(stream, sb, oldGroups) is { } mismatch)
+        {
+            blockedReason = mismatch;
+            return null;
+        }
+
+        // The whole safety argument: nothing live may sit above the new end.
+        if (RegionInUse(stream, sb, oldGroups, newGroups, newTotalBlocks) is { } inUse)
+        {
+            blockedReason = inUse;
+            return null;
+        }
+
+        blockedReason = null;
+        return new ExtShrinkPlan
+        {
+            BlockSize = sb.BlockSize,
+            OldTotalBlocks = sb.TotalBlocks,
+            NewTotalBlocks = newTotalBlocks,
+            OldGroupCount = oldGroups,
+            NewGroupCount = newGroups,
+            RemovedFreeBlocks = CountRemovedFreeBlocks(sb, oldGroups, newGroups, newTotalBlocks),
+            RemovedInodes = sb.InodesPerGroup * (oldGroups - newGroups)
+        };
+    }
+
+    /// <summary>
+    /// Applies a shrink. The superblock's block count drops <b>last</b>, so an interruption leaves a
+    /// filesystem still describing the larger volume, which is intact and checkable.
+    /// </summary>
+    public static void Shrink(Stream stream, ExtShrinkPlan plan)
+    {
+        var sb = ReadSuperblock(stream)
+                 ?? throw new InvalidOperationException("The ext superblock disappeared before the resize.");
+
+        var descriptors = ReadDescriptorTable(stream, sb);
+
+        // The group that becomes last may end mid-group. Blocks past the new end must read as in-use,
+        // or fsck reports free space that is no longer part of the filesystem.
+        TruncateFinalGroup(stream, sb, descriptors, plan);
+
+        // Trailing descriptors describe groups that no longer exist.
+        var removed = (int)((plan.OldGroupCount - plan.NewGroupCount) * GroupDescriptorSize);
+        if (removed > 0)
+            Array.Clear(descriptors, (int)(plan.NewGroupCount * GroupDescriptorSize), removed);
+
+        WriteDescriptorTableEverywhere(stream, sb, descriptors, plan.NewGroupCount);
+        UpdateSuperblocksForShrink(stream, sb, plan);
+
+        stream.Flush();
+    }
+
+    /// <summary>
+    /// Marks the blocks past the new end of the volume as in-use in the final surviving group, and
+    /// drops them from its free count.
+    /// </summary>
+    private static void TruncateFinalGroup(
+        Stream stream, Superblock sb, byte[] descriptors, ExtShrinkPlan plan)
+    {
+        var group = plan.NewGroupCount - 1;
+        var groupStart = sb.FirstDataBlock + group * sb.BlocksPerGroup;
+
+        var before = BlocksInGroup(groupStart, sb.BlocksPerGroup, plan.OldTotalBlocks);
+        var after = BlocksInGroup(groupStart, sb.BlocksPerGroup, plan.NewTotalBlocks);
+        if (after >= before) return;
+
+        var blockBitmapBlock = ReadU32(descriptors, (int)(group * GroupDescriptorSize));
+        var bitmap = ReadBlock(stream, sb, blockBitmapBlock);
+
+        for (var i = after; i < before; i++) SetBit(bitmap, i);
+        WriteBlock(stream, sb, blockBitmapBlock, bitmap);
+
+        var at = (int)(group * GroupDescriptorSize);
+        var free = BinaryPrimitives.ReadUInt16LittleEndian(descriptors.AsSpan(at + 12));
+        BinaryPrimitives.WriteUInt16LittleEndian(descriptors.AsSpan(at + 12), (ushort)(free - (before - after)));
+    }
+
+    private static void UpdateSuperblocksForShrink(Stream stream, Superblock sb, ExtShrinkPlan plan)
+    {
+        var newInodeCount = sb.InodeCount - plan.RemovedInodes;
+        var newFreeBlocks = sb.FreeBlocks - plan.RemovedFreeBlocks;
+        var newFreeInodes = sb.FreeInodes - plan.RemovedInodes;
+
+        for (uint g = 0; g < plan.NewGroupCount; g++)
+        {
+            if (!HasSuperBackup(sb, g)) continue;
+
+            var offset = g == 0
+                ? SuperblockOffset
+                : (long)(sb.FirstDataBlock + g * sb.BlocksPerGroup) * sb.BlockSize;
+
+            stream.Position = offset;
+            var buffer = new byte[SuperblockLength];
+            ReadExact(stream, buffer);
+
+            WriteU32(buffer, 0, newInodeCount);
+            WriteU32(buffer, 4, plan.NewTotalBlocks);
+            WriteU32(buffer, 8, plan.NewTotalBlocks / 20);
+            WriteU32(buffer, 12, newFreeBlocks);
+            WriteU32(buffer, 16, newFreeInodes);
+            BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(90), (ushort)g);
+
+            stream.Position = offset;
+            stream.Write(buffer);
+        }
+    }
+
+    /// <summary>
+    /// Returns a reason when anything live sits in the region being cut away, or null when the tail is
+    /// entirely free. A group being removed outright may still have its own metadata marked in use;
+    /// that disappears with the group and does not block the shrink.
+    /// </summary>
+    private static string? RegionInUse(
+        Stream stream, Superblock sb, uint oldGroups, uint newGroups, uint newTotalBlocks)
+    {
+        var descriptors = ReadDescriptorTable(stream, sb);
+
+        // Groups that vanish entirely: every data block and every inode in them must be free.
+        for (var g = newGroups; g < oldGroups; g++)
+        {
+            var at = (int)(g * GroupDescriptorSize);
+            var groupStart = sb.FirstDataBlock + g * sb.BlocksPerGroup;
+            var blocksHere = BlocksInGroup(groupStart, sb.BlocksPerGroup, sb.TotalBlocks);
+
+            var superBackup = HasSuperBackup(sb, g) ? 1 + sb.GroupDescriptorBlocks + sb.ReservedGdtBlocks : 0;
+            var ownMetadata = superBackup + 2 + sb.InodeTableBlocks;
+
+            var bitmap = ReadBlock(stream, sb, ReadU32(descriptors, at));
+            for (var i = ownMetadata; i < blocksHere; i++)
+            {
+                if (!GetBit(bitmap, i)) continue;
+                return $"There is data stored {Bytes((ulong)(groupStart + i) * sb.BlockSize)} into the " +
+                       "filesystem, past where it would end. Shrinking would have to move it, which is " +
+                       "not supported yet. Free up space at the end of the volume first.";
+            }
+
+            var inodeBitmap = ReadBlock(stream, sb, ReadU32(descriptors, at + 4));
+            for (uint i = 0; i < sb.InodesPerGroup; i++)
+            {
+                if (!GetBit(inodeBitmap, i)) continue;
+                return "There are files whose inodes live in the part of the filesystem that would be " +
+                       "removed. Moving them would renumber them, which is not supported yet.";
+            }
+        }
+
+        // The group that survives but gets truncated: its tail must be free.
+        var lastGroup = newGroups - 1;
+        var lastStart = sb.FirstDataBlock + lastGroup * sb.BlocksPerGroup;
+        var keepTo = newTotalBlocks - lastStart;
+        var hadTo = BlocksInGroup(lastStart, sb.BlocksPerGroup, sb.TotalBlocks);
+
+        var lastBitmap = ReadBlock(stream, sb, ReadU32(descriptors, (int)(lastGroup * GroupDescriptorSize)));
+        for (var i = keepTo; i < hadTo; i++)
+        {
+            if (!GetBit(lastBitmap, i)) continue;
+            return $"There is data stored {Bytes((ulong)(lastStart + i) * sb.BlockSize)} into the " +
+                   "filesystem, past where it would end. Shrinking would have to move it, which is not " +
+                   "supported yet. Free up space at the end of the volume first.";
+        }
+
+        return null;
+    }
+
+    private static uint CountRemovedFreeBlocks(
+        Superblock sb, uint oldGroups, uint newGroups, uint newTotalBlocks)
+    {
+        uint removed = 0;
+
+        var lastStart = sb.FirstDataBlock + (newGroups - 1) * sb.BlocksPerGroup;
+        removed += BlocksInGroup(lastStart, sb.BlocksPerGroup, sb.TotalBlocks)
+                   - BlocksInGroup(lastStart, sb.BlocksPerGroup, newTotalBlocks);
+
+        for (var g = newGroups; g < oldGroups; g++)
+        {
+            var start = sb.FirstDataBlock + g * sb.BlocksPerGroup;
+            var inGroup = BlocksInGroup(start, sb.BlocksPerGroup, sb.TotalBlocks);
+            var superBackup = HasSuperBackup(sb, g) ? 1 + sb.GroupDescriptorBlocks + sb.ReservedGdtBlocks : 0;
+            removed += inGroup - (superBackup + 2 + sb.InodeTableBlocks);
+        }
+
+        return removed;
+    }
+
+    private static bool GetBit(byte[] bitmap, uint index) => (bitmap[index >> 3] & (1 << (int)(index & 7))) != 0;
 
     /// <summary>
     /// Applies a plan produced by <see cref="TryPlanGrow"/>. The order matters: everything the new

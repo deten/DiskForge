@@ -28,13 +28,22 @@ public class ResizePartitionOperationTests
             DriveLetter = "E",
             IsSystem = system,
             IsBoot = boot,
+            // A Linux volume is identified by reading its superblock, not by Windows mounting it, so
+            // its usage is unknown. Mirroring that here keeps the fixture honest: tests that assume
+            // Windows can measure an ext volume would pass against a state that never occurs.
             Volume = fs.Length == 0 ? null : new VolumeInfo
             {
                 DriveLetter = "E", Label = "DATA", FileSystem = fs,
                 SizeBytes = size, FreeBytes = size - (used ?? size / 2),
+                UsageKnown = !IsLinuxFs(fs),
+                MountedByWindows = !IsLinuxFs(fs),
                 BitLocker = bl ?? BitLockerInfo.NotEncryptable
             }
         };
+
+    private static bool IsLinuxFs(string fs) =>
+        fs.StartsWith("ext", StringComparison.OrdinalIgnoreCase) ||
+        fs is "btrfs" or "xfs" or "f2fs" or "swap";
 
     private static PhysicalDiskInfo Disk(
         ulong size = 32 * GB, bool removable = true, bool system = false,
@@ -103,19 +112,20 @@ public class ResizePartitionOperationTests
     }
 
     /// <summary>
-    /// Shrinking ext means relocating live data inside the filesystem, which is not implemented. The
-    /// refusal has to name shrinking specifically, or a user reads it as "ext is unsupported".
+    /// ext shrinks too, but only when the space being cut away is already free. That can only be known
+    /// by reading the filesystem, so Validate lets it through and the check happens at Apply against
+    /// the real superblock and bitmaps.
     /// </summary>
     [Theory]
     [InlineData("ext2")]
     [InlineData("ext4")]
-    public void Ext_CannotBeShrunkYet(string fs)
+    public void Ext_CanBeShrunk_WithTheRealCheckDeferredToApply(string fs)
     {
         var part = Part(fs: fs, kind: PartitionKind.Linux, used: 1 * GB);
         var result = Resize(4 * GB).Validate(State(Disk(parts: new[] { part })));
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, e => e.Contains("Shrinking") && e.Contains("Growing it works"));
+        Assert.True(result.IsValid, string.Join(" ", result.Errors));
+        Assert.Contains(result.Warnings, w => w.Contains("only be known at Apply"));
     }
 
     /// <summary>The filesystems with no resize logic at all, in either direction.</summary>

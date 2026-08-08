@@ -225,14 +225,10 @@ public sealed class ResizePartitionOperation : IDiskOperation
         var fs = part.Volume?.FileSystem;
         var growing = Settings.NewSizeBytes > part.SizeBytes;
 
-        // ext is grown by DiskForge itself. Shrinking it means relocating live data and rewriting
-        // extent trees, which is not implemented, so say that specifically rather than "Linux".
-        if (IsExtName(fs))
-            return growing
-                ? null
-                : $"Shrinking {fs} is not supported yet — it would mean relocating live data inside the " +
-                  "filesystem. Growing it works. To make it smaller, back up, recreate the partition at " +
-                  "the size you want, and restore.";
+        // ext is resized by DiskForge itself, in both directions. A shrink additionally requires the
+        // space being cut away to be free already; that can only be known by reading the filesystem,
+        // so it is checked at Apply rather than guessed at here.
+        if (IsExtName(fs)) return null;
 
         if (part.Kind == PartitionKind.Linux || (fs is not null && IsLinuxName(fs)))
             return $"Resizing {fs ?? "this Linux filesystem"} is not supported yet. Windows cannot resize " +
@@ -302,16 +298,35 @@ public sealed class ResizePartitionOperation : IDiskOperation
         var target = FindPartition(fresh);
         var ext = IsExtName(target?.Volume?.FileSystem);
 
-        // For ext, work out whether the filesystem itself can be grown BEFORE the extent is touched.
-        // Extending the partition and then failing to grow the filesystem would leave a partition
-        // larger than its contents, which is harmless but confusing; failing first changes nothing.
+        // For ext, decide what the filesystem can do BEFORE the extent is touched, so a filesystem
+        // that cannot be resized fails having changed nothing.
+        var shrinking = target is not null && Settings.NewSizeBytes < target.SizeBytes;
         ExtGrowPlan? growPlan = null;
+        ExtShrinkPlan? shrinkPlan = null;
+
         if (ext && target is not null)
         {
             progress.Report(new OpProgress("Checking the ext filesystem…", 0.1, Describe().Title));
-            growPlan = PlanExtGrow(fresh, target, out var extBlocked);
-            if (growPlan is null)
-                return OpResult.Failed($"The filesystem cannot be grown, so nothing was changed. {extBlocked}");
+
+            if (shrinking)
+            {
+                shrinkPlan = PlanExtShrink(fresh, target, out var blocked);
+                if (shrinkPlan is null)
+                    return OpResult.Failed($"The filesystem cannot be shrunk, so nothing was changed. {blocked}");
+
+                // Shrink the filesystem FIRST. The reverse order would leave the partition smaller
+                // than the filesystem inside it, which is exactly how a resize destroys data.
+                progress.Report(new OpProgress("Shrinking the ext filesystem…", 0.3));
+                if (ResizeExtFilesystem(target, shrinkPlan, null) is { } shrinkError)
+                    return OpResult.Failed(
+                        $"The ext filesystem could not be shrunk, so the partition was left alone: {shrinkError}");
+            }
+            else
+            {
+                growPlan = PlanExtGrow(fresh, target, out var blocked);
+                if (growPlan is null)
+                    return OpResult.Failed($"The filesystem cannot be grown, so nothing was changed. {blocked}");
+            }
         }
 
         progress.Report(new OpProgress("Checking the supported size range…", 0.15, Describe().Title));
@@ -342,7 +357,7 @@ public sealed class ResizePartitionOperation : IDiskOperation
         if (growPlan is not null)
         {
             progress.Report(new OpProgress("Growing the ext filesystem…", 0.7));
-            if (GrowExtFilesystem(growPlan) is { } growError)
+            if (ResizeExtFilesystem(target!, null, growPlan) is { } growError)
                 return OpResult.Failed(
                     $"The partition was resized to {Bytes(Settings.NewSizeBytes)}, but the ext filesystem " +
                     $"inside it could not be grown: {growError} The filesystem is still valid at its " +
@@ -430,21 +445,47 @@ public sealed class ResizePartitionOperation : IDiskOperation
     }
 
     /// <summary>
-    /// Grows the ext filesystem into the enlarged extent. Returns null on success, or the reason.
-    /// The stream is opened at the <b>new</b> partition length, since that is the space the filesystem
-    /// is about to claim.
+    /// Reads the ext superblock and works out whether the filesystem can be shrunk. Read-only, so a
+    /// refusal leaves the disk untouched.
     /// </summary>
-    private string? GrowExtFilesystem(ExtGrowPlan plan)
+    private ExtShrinkPlan? PlanExtShrink(SystemState state, PartitionInfo part, out string? blockedReason)
+    {
+        var sector = (int)(state.FindDisk(Settings.DiskNumber)?.LogicalSectorSize ?? 512);
+
+        try
+        {
+            using var handle = RawDiskAccess.OpenRead(Settings.DiskNumber);
+            using var stream = new RawPartitionStream(
+                handle, (long)part.OffsetBytes, (long)part.SizeBytes, sector);
+
+            return ExtResizer.TryPlanShrink(stream, Settings.NewSizeBytes, out blockedReason);
+        }
+        catch (Exception ex)
+        {
+            blockedReason = $"Its superblock could not be read: {ex.Message}";
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Applies a grow or a shrink to the ext filesystem. Exactly one plan is expected.
+    ///
+    /// The stream length differs by direction. A grow runs after the extent was enlarged, so it uses
+    /// the partition's current (new) length. A shrink runs <i>before</i> the extent moves, so the
+    /// partition is still the old, larger size, which is what the filesystem still occupies.
+    /// </summary>
+    private string? ResizeExtFilesystem(PartitionInfo staged, ExtShrinkPlan? shrink, ExtGrowPlan? grow)
     {
         try
         {
             var state = _inspector.Capture(probeLinuxToolchain: false);
             var disk = state.FindDisk(Settings.DiskNumber);
-            var part = disk?.Partitions.FirstOrDefault(p => p.PartitionNumber == Settings.PartitionNumber);
-            if (disk is null || part is null) return "the partition could not be found again.";
+            var part = disk?.Partitions.FirstOrDefault(p => p.PartitionNumber == Settings.PartitionNumber)
+                       ?? staged;
+            if (disk is null) return "the disk could not be found again.";
 
             // Windows refuses sector writes under a mounted volume, and it may have mounted the
-            // enlarged partition in the moment after the resize.
+            // partition in the moment after a resize.
             foreach (var line in DiskVolumeReleaser.Release(disk)) Log.Information("{Step}", line);
 
             using var handle = RawDiskAccess.OpenWrite(Settings.DiskNumber);
@@ -452,14 +493,24 @@ public sealed class ResizePartitionOperation : IDiskOperation
                 handle, (long)part.OffsetBytes, (long)part.SizeBytes,
                 (int)(disk.LogicalSectorSize ?? 512));
 
-            ExtResizer.Grow(stream, plan);
-            Log.Information("Grew ext filesystem on disk {Disk} partition {Part} to {Blocks} blocks",
-                Settings.DiskNumber, Settings.PartitionNumber, plan.NewTotalBlocks);
+            if (shrink is not null)
+            {
+                ExtResizer.Shrink(stream, shrink);
+                Log.Information("Shrank ext filesystem on disk {Disk} partition {Part} to {Blocks} blocks",
+                    Settings.DiskNumber, Settings.PartitionNumber, shrink.NewTotalBlocks);
+            }
+            else if (grow is not null)
+            {
+                ExtResizer.Grow(stream, grow);
+                Log.Information("Grew ext filesystem on disk {Disk} partition {Part} to {Blocks} blocks",
+                    Settings.DiskNumber, Settings.PartitionNumber, grow.NewTotalBlocks);
+            }
+
             return null;
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Growing the ext filesystem failed on disk {Disk}", Settings.DiskNumber);
+            Log.Error(ex, "Resizing the ext filesystem failed on disk {Disk}", Settings.DiskNumber);
             return ex.Message;
         }
     }
