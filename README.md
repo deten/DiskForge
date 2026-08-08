@@ -73,6 +73,9 @@ diskforge verify-media --disk <n> --write --yes
                                             Full write and read-back test. Each 4 KiB block carries
                                             its own offset, so a block returning another block's data
                                             is identified as aliasing
+diskforge resize --disk <n> --partition <p> --size <MB> --yes
+                                            Grow or shrink a partition, keeping its contents. NTFS
+                                            grows and shrinks; ext2, ext3 and ext4 grow
 ```
 
 Commands that write require Administrator and refuse the system disk.
@@ -86,12 +89,12 @@ Delivered:
 - Phase 3, VHDX loopback test harness for real write-operation round trips
 - Phase 4, write operations: format, create, delete, labels, drive letters
 - Phase 5, resize partitions in place, growing and shrinking NTFS with its filesystem
-- Native ext2/ext3/ext4 writer
+- Native ext2/ext3/ext4 writer, and native in place growth for those filesystems
 - Phase 8 first increment, whole disk clone with verified copy
 
 Next up:
 
-- Resize for Linux filesystems, so ext partitions can grow and shrink too
+- Shrinking ext filesystems, which needs live data relocated inside the filesystem
 - Check and repair filesystems
 - Convert between MBR and GPT in place, preserving data
 - Native btrfs and XFS writers, so every Linux filesystem works on removable media

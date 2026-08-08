@@ -1,6 +1,8 @@
 using DiskForge.Core.Model;
 using DiskForge.Core.Operations;
 using DiskForge.Core.Planning;
+using DiskForge.Engine.Linux.Ext;
+using DiskForge.Engine.Native;
 using Serilog;
 
 namespace DiskForge.Engine.Operations;
@@ -218,14 +220,24 @@ public sealed class ResizePartitionOperation : IDiskOperation
     }
 
     /// <summary>Null when the filesystem can be resized, or the reason it cannot.</summary>
-    private static string? FileSystemBlock(PartitionInfo part)
+    private string? FileSystemBlock(PartitionInfo part)
     {
         var fs = part.Volume?.FileSystem;
+        var growing = Settings.NewSizeBytes > part.SizeBytes;
+
+        // ext is grown by DiskForge itself. Shrinking it means relocating live data and rewriting
+        // extent trees, which is not implemented, so say that specifically rather than "Linux".
+        if (IsExtName(fs))
+            return growing
+                ? null
+                : $"Shrinking {fs} is not supported yet — it would mean relocating live data inside the " +
+                  "filesystem. Growing it works. To make it smaller, back up, recreate the partition at " +
+                  "the size you want, and restore.";
 
         if (part.Kind == PartitionKind.Linux || (fs is not null && IsLinuxName(fs)))
-            return $"Resizing a Linux filesystem ({fs ?? "ext4/btrfs/xfs"}) is not supported yet. Windows " +
-                   "cannot resize it, and doing it properly needs the filesystem's own resize tool. " +
-                   "Back up, recreate the partition at the size you want, and restore.";
+            return $"Resizing {fs ?? "this Linux filesystem"} is not supported yet. Windows cannot resize " +
+                   "it, and doing it properly needs the filesystem's own resize logic. ext2, ext3 and " +
+                   "ext4 can be grown. Otherwise back up, recreate the partition, and restore.";
 
         if (string.IsNullOrWhiteSpace(fs) || fs.Equals("RAW", StringComparison.OrdinalIgnoreCase))
             return "This partition has no filesystem Windows can read, so it cannot be resized safely. " +
@@ -238,6 +250,9 @@ public sealed class ResizePartitionOperation : IDiskOperation
 
         return null;
     }
+
+    private static bool IsExtName(string? fs) =>
+        fs is not null && fs.StartsWith("ext", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsLinuxName(string fs) =>
         fs.StartsWith("ext", StringComparison.OrdinalIgnoreCase) ||
@@ -284,10 +299,26 @@ public sealed class ResizePartitionOperation : IDiskOperation
             return OpResult.Failed("Preflight re-check failed: " + string.Join(" ", recheck.Errors));
 
         var started = DateTimeOffset.UtcNow;
-        progress.Report(new OpProgress("Checking the supported size range…", 0.1, Describe().Title));
+        var target = FindPartition(fresh);
+        var ext = IsExtName(target?.Volume?.FileSystem);
+
+        // For ext, work out whether the filesystem itself can be grown BEFORE the extent is touched.
+        // Extending the partition and then failing to grow the filesystem would leave a partition
+        // larger than its contents, which is harmless but confusing; failing first changes nothing.
+        ExtGrowPlan? growPlan = null;
+        if (ext && target is not null)
+        {
+            progress.Report(new OpProgress("Checking the ext filesystem…", 0.1, Describe().Title));
+            growPlan = PlanExtGrow(fresh, target, out var extBlocked);
+            if (growPlan is null)
+                return OpResult.Failed($"The filesystem cannot be grown, so nothing was changed. {extBlocked}");
+        }
+
+        progress.Report(new OpProgress("Checking the supported size range…", 0.15, Describe().Title));
 
         // The filesystem's real bounds, not our estimate. Windows knows where its immovable files are.
-        var bounds = await QuerySupportedSizeAsync(ct).ConfigureAwait(false);
+        // It cannot answer for a filesystem it does not understand, so this is skipped for ext.
+        var bounds = ext ? null : await QuerySupportedSizeAsync(ct).ConfigureAwait(false);
         if (bounds is { } b)
         {
             if (Settings.NewSizeBytes < b.Min)
@@ -302,19 +333,135 @@ public sealed class ResizePartitionOperation : IDiskOperation
 
         progress.Report(new OpProgress("Resizing…", 0.4));
 
-        var script = "$ErrorActionPreference='Stop'; " +
-                     $"Resize-Partition -DiskNumber {Settings.DiskNumber} " +
-                     $"-PartitionNumber {Settings.PartitionNumber} -Size {Settings.NewSizeBytes}; " +
-                     "'DISKFORGE_OK'";
-
-        var result = await PowerShellRunner.RunAsync(script, ct).ConfigureAwait(false);
+        var style = fresh.FindDisk(Settings.DiskNumber)?.PartitionStyle ?? PartitionStyle.Gpt;
+        var result = await PowerShellRunner.RunAsync(BuildResizeScript(ext, style), ct).ConfigureAwait(false);
         if (!result.Success)
             return OpResult.Failed($"Resize failed: {(result.Error.Length > 0 ? result.Error : result.Output)}");
+
+        // The extent is bigger now; make the filesystem claim the new space.
+        if (growPlan is not null)
+        {
+            progress.Report(new OpProgress("Growing the ext filesystem…", 0.7));
+            if (GrowExtFilesystem(growPlan) is { } growError)
+                return OpResult.Failed(
+                    $"The partition was resized to {Bytes(Settings.NewSizeBytes)}, but the ext filesystem " +
+                    $"inside it could not be grown: {growError} The filesystem is still valid at its " +
+                    "previous size; the extra space is simply unused.");
+        }
 
         progress.Report(new OpProgress("Resize complete", 1.0));
         Log.Information("Resized partition {Part} on disk {Disk} to {Size} bytes",
             Settings.PartitionNumber, Settings.DiskNumber, Settings.NewSizeBytes);
         return OpResult.Ok(DateTimeOffset.UtcNow - started);
+    }
+
+    /// <summary>Basic data partition types, the only ones <c>Resize-Partition</c> will act on.</summary>
+    private static readonly Guid BasicDataGpt = new("ebd0a0a2-b9e5-4433-87c0-68b6b72699c7");
+    private const byte BasicDataMbr = 0x07;
+
+    /// <summary>
+    /// The resize script.
+    ///
+    /// <c>Resize-Partition</c> refuses anything that is not a basic data partition: on a Linux-typed
+    /// extent it fails with "This operation is only supported on data partitions", which is exactly
+    /// what happened on a real USB stick. Windows is only being asked to move the extent boundary, not
+    /// to understand the filesystem, so the partition is presented as basic data for the length of the
+    /// call and put back afterwards. The restore sits in a PowerShell <c>finally</c> so it still runs
+    /// if the resize throws — leaving a Linux partition tagged as basic data would invite Explorer to
+    /// offer to format it.
+    /// </summary>
+    public string BuildResizeScript(bool retagAsBasicData, PartitionStyle style)
+    {
+        var s = Settings;
+        var target = $"-DiskNumber {s.DiskNumber} -PartitionNumber {s.PartitionNumber}";
+        var resize = $"Resize-Partition {target} -Size {s.NewSizeBytes}";
+
+        if (!retagAsBasicData)
+            return $"$ErrorActionPreference='Stop'; {resize}; 'DISKFORGE_OK'";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("$ErrorActionPreference='Stop'");
+
+        if (style == PartitionStyle.Mbr)
+        {
+            sb.AppendLine($"$orig = (Get-Partition {target}).MbrType");
+            sb.AppendLine("try {");
+            sb.AppendLine($"  Set-Partition {target} -MbrType {BasicDataMbr}");
+            sb.AppendLine($"  {resize}");
+            sb.AppendLine("}");
+            sb.AppendLine($"finally {{ Set-Partition {target} -MbrType $orig }}");
+        }
+        else
+        {
+            sb.AppendLine($"$orig = (Get-Partition {target}).GptType");
+            sb.AppendLine("try {");
+            sb.AppendLine($"  Set-Partition {target} -GptType '{{{BasicDataGpt:D}}}'");
+            sb.AppendLine($"  {resize}");
+            sb.AppendLine("}");
+            sb.AppendLine($"finally {{ Set-Partition {target} -GptType $orig }}");
+        }
+
+        sb.AppendLine("'DISKFORGE_OK'");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Reads the ext superblock off the partition and works out whether it can be grown to the target
+    /// size. Read-only: nothing is written here, so a refusal leaves the disk exactly as it was.
+    /// </summary>
+    private ExtGrowPlan? PlanExtGrow(SystemState state, PartitionInfo part, out string? blockedReason)
+    {
+        var disk = state.FindDisk(Settings.DiskNumber);
+        var sector = (int)(disk?.LogicalSectorSize ?? 512);
+
+        try
+        {
+            using var handle = RawDiskAccess.OpenRead(Settings.DiskNumber);
+            using var stream = new RawPartitionStream(
+                handle, (long)part.OffsetBytes, (long)part.SizeBytes, sector);
+
+            return ExtResizer.TryPlanGrow(stream, Settings.NewSizeBytes, out blockedReason);
+        }
+        catch (Exception ex)
+        {
+            blockedReason = $"Its superblock could not be read: {ex.Message}";
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Grows the ext filesystem into the enlarged extent. Returns null on success, or the reason.
+    /// The stream is opened at the <b>new</b> partition length, since that is the space the filesystem
+    /// is about to claim.
+    /// </summary>
+    private string? GrowExtFilesystem(ExtGrowPlan plan)
+    {
+        try
+        {
+            var state = _inspector.Capture(probeLinuxToolchain: false);
+            var disk = state.FindDisk(Settings.DiskNumber);
+            var part = disk?.Partitions.FirstOrDefault(p => p.PartitionNumber == Settings.PartitionNumber);
+            if (disk is null || part is null) return "the partition could not be found again.";
+
+            // Windows refuses sector writes under a mounted volume, and it may have mounted the
+            // enlarged partition in the moment after the resize.
+            foreach (var line in DiskVolumeReleaser.Release(disk)) Log.Information("{Step}", line);
+
+            using var handle = RawDiskAccess.OpenWrite(Settings.DiskNumber);
+            using var stream = new RawPartitionStream(
+                handle, (long)part.OffsetBytes, (long)part.SizeBytes,
+                (int)(disk.LogicalSectorSize ?? 512));
+
+            ExtResizer.Grow(stream, plan);
+            Log.Information("Grew ext filesystem on disk {Disk} partition {Part} to {Blocks} blocks",
+                Settings.DiskNumber, Settings.PartitionNumber, plan.NewTotalBlocks);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Growing the ext filesystem failed on disk {Disk}", Settings.DiskNumber);
+            return ex.Message;
+        }
     }
 
     /// <summary>

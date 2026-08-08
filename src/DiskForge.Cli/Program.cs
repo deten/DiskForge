@@ -27,6 +27,13 @@ if (args.Length > 0 && string.Equals(args[0], "verify-media", StringComparison.O
     return code;
 }
 
+if (args.Length > 0 && string.Equals(args[0], "resize", StringComparison.OrdinalIgnoreCase))
+{
+    var code = await ResizeCommand.RunAsync(args);
+    Log.CloseAndFlush();
+    return code;
+}
+
 var state = new SystemInspector().Capture();
 
 Console.WriteLine();

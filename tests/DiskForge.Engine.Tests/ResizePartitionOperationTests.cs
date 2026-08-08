@@ -89,17 +89,47 @@ public class ResizePartitionOperationTests
         Assert.Contains(result.Errors, e => e.Contains("cannot resize") && e.Contains(fs));
     }
 
+    /// <summary>ext is grown by DiskForge's own resizer, so growing it is allowed.</summary>
     [Theory]
+    [InlineData("ext2")]
+    [InlineData("ext3")]
     [InlineData("ext4")]
+    public void Ext_CanBeGrown(string fs)
+    {
+        var part = Part(fs: fs, kind: PartitionKind.Linux);
+        var result = Resize(12 * GB).Validate(State(Disk(parts: new[] { part })));
+
+        Assert.True(result.IsValid, string.Join(" ", result.Errors));
+    }
+
+    /// <summary>
+    /// Shrinking ext means relocating live data inside the filesystem, which is not implemented. The
+    /// refusal has to name shrinking specifically, or a user reads it as "ext is unsupported".
+    /// </summary>
+    [Theory]
+    [InlineData("ext2")]
+    [InlineData("ext4")]
+    public void Ext_CannotBeShrunkYet(string fs)
+    {
+        var part = Part(fs: fs, kind: PartitionKind.Linux, used: 1 * GB);
+        var result = Resize(4 * GB).Validate(State(Disk(parts: new[] { part })));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("Shrinking") && e.Contains("Growing it works"));
+    }
+
+    /// <summary>The filesystems with no resize logic at all, in either direction.</summary>
+    [Theory]
     [InlineData("btrfs")]
     [InlineData("xfs")]
-    public void LinuxFileSystems_AreRefusedWithTheirOwnReason(string fs)
+    [InlineData("f2fs")]
+    public void OtherLinuxFileSystems_AreRefused(string fs)
     {
         var part = Part(fs: fs, kind: PartitionKind.Linux);
         var result = Resize(12 * GB).Validate(State(Disk(parts: new[] { part })));
 
         Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, e => e.Contains("Linux filesystem"));
+        Assert.Contains(result.Errors, e => e.Contains("not supported yet") && e.Contains(fs));
     }
 
     [Fact]
@@ -315,6 +345,45 @@ public class ResizePartitionOperationTests
         var first = planned.Regions.Single(r => r.Partition.PartitionNumber == 1);
         Assert.Equal(8 * GB, first.Partition.SizeBytes);
         Assert.Equal(PendingChange.None, first.Pending);
+    }
+
+    // ---------- the generated script ----------
+
+    /// <summary>
+    /// Windows refuses Resize-Partition on a Linux-typed extent ("only supported on data partitions",
+    /// seen on a real USB stick). The partition is presented as basic data for the call and restored
+    /// in a finally, so a failure cannot leave a Linux partition looking like a Windows one.
+    /// </summary>
+    [Fact]
+    public void ExtResizeScript_RetagsAsBasicDataAndAlwaysRestoresTheType()
+    {
+        var script = Resize(12 * GB).BuildResizeScript(retagAsBasicData: true, PartitionStyle.Gpt);
+
+        Assert.Contains("$orig = (Get-Partition", script);
+        Assert.Contains("ebd0a0a2-b9e5-4433-87c0-68b6b72699c7", script);
+        Assert.Contains("Resize-Partition", script);
+        Assert.Contains("finally { Set-Partition", script);
+        Assert.Contains("-GptType $orig", script);
+    }
+
+    [Fact]
+    public void ExtResizeScript_OnMbr_RestoresTheMbrType()
+    {
+        var script = Resize(12 * GB).BuildResizeScript(retagAsBasicData: true, PartitionStyle.Mbr);
+
+        Assert.Contains("-MbrType 7", script);
+        Assert.Contains("finally { Set-Partition", script);
+        Assert.Contains("-MbrType $orig", script);
+    }
+
+    /// <summary>NTFS is already a basic data partition, so nothing needs retagging.</summary>
+    [Fact]
+    public void NtfsResizeScript_DoesNotTouchThePartitionType()
+    {
+        var script = Resize(12 * GB).BuildResizeScript(retagAsBasicData: false, PartitionStyle.Gpt);
+
+        Assert.Contains("Resize-Partition", script);
+        Assert.DoesNotContain("Set-Partition", script);
     }
 
     [Fact]
