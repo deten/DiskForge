@@ -10,7 +10,7 @@ DiskForge is built around having a free reliable partition manager that can dest
 | Area | Capability |
 |---|---|
 | Inspect | Full topology: disks, partitions, volumes, capability profile, BitLocker state, USB link speed |
-| Partition | Create on unallocated space, delete, set volume label, set drive letter |
+| Partition | Create on unallocated space, delete, resize, set volume label, set drive letter |
 | Format (Windows) | exFAT, NTFS, FAT32, in place or clean whole disk |
 | Format (Linux) | ext2, ext3, ext4 written natively, plus btrfs, XFS, F2FS and swap |
 | Partition table | Choose GPT or MBR when erasing a whole disk |
@@ -85,12 +85,13 @@ Delivered:
 - Phase 2, read-only enumeration, capability profiling, connection and link detection
 - Phase 3, VHDX loopback test harness for real write-operation round trips
 - Phase 4, write operations: format, create, delete, labels, drive letters
+- Phase 5, resize partitions in place, growing and shrinking NTFS with its filesystem
 - Native ext2/ext3/ext4 writer
 - Phase 8 first increment, whole disk clone with verified copy
 
 Next up:
 
-- Resize, extend and shrink partitions, with alignment and shrink-over-used-data guards
+- Resize for Linux filesystems, so ext partitions can grow and shrink too
 - Check and repair filesystems
 - Convert between MBR and GPT in place, preserving data
 - Native btrfs and XFS writers, so every Linux filesystem works on removable media

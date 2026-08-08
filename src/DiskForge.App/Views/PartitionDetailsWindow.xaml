@@ -59,6 +59,36 @@
                     <TextBlock Text="{Binding CannotEditReason}" Opacity="0.7" FontSize="12" TextWrapping="Wrap" />
                 </Border>
 
+                <!-- Resize. Offered only where Windows can move the filesystem with the extent. -->
+                <StackPanel Visibility="{Binding CanResize, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="Resize" FontSize="15" FontWeight="SemiBold" Margin="0,20,0,8" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Slider Grid.Column="0" Minimum="{Binding MinResizeMb}" Maximum="{Binding MaxResizeMb}"
+                                Value="{Binding ResizeMb}" IsSnapToTickEnabled="True" TickFrequency="1"
+                                VerticalAlignment="Center" />
+                        <!-- ValueChanged→UpdateSource: WPF-UI 3.0.5's NumberBox commits typed text into
+                             Value on focus loss but its TwoWay binding does not push that to the source,
+                             so a typed size would be silently discarded. Same fix as CreatePartitionWindow. -->
+                        <ui:NumberBox x:Name="ResizeBox" Grid.Column="1" MinWidth="120" Margin="12,0,0,0"
+                                      Value="{Binding ResizeMb, Mode=TwoWay}"
+                                      ValueChanged="ResizeBox_ValueChanged"
+                                      Minimum="{Binding MinResizeMb}" Maximum="{Binding MaxResizeMb}"
+                                      SpinButtonPlacementMode="Compact" ClearButtonEnabled="False" />
+                    </Grid>
+                    <TextBlock Text="{Binding ResizeSummary}" Opacity="0.75" FontSize="12"
+                               Margin="0,8,0,0" TextWrapping="Wrap" />
+                </StackPanel>
+
+                <Border Margin="0,16,0,0" CornerRadius="8" Padding="12,10" Background="#0DFFFFFF"
+                        Visibility="{Binding CanResize, Converter={StaticResource BoolToVisInverse}}">
+                    <TextBlock Text="{Binding ResizeBlockedReason}" Opacity="0.7" FontSize="12"
+                               TextWrapping="Wrap" />
+                </Border>
+
                 <!-- Internal-disk override for the destructive Delete task -->
                 <Border Margin="0,16,0,0" CornerRadius="8" Padding="12,10"
                         Background="#26EF4444" BorderBrush="#66EF4444" BorderThickness="1"
@@ -80,6 +110,8 @@
                                IsEnabled="{Binding CanFormat}" Click="Format_Click" />
                     <ui:Button x:Name="DeleteButton" Content="Delete…" Icon="{ui:SymbolIcon Delete24}"
                                Margin="10,0,0,0" IsEnabled="{Binding CanDelete}" Click="Delete_Click" />
+                    <ui:Button x:Name="ResizeButton" Content="Resize" Icon="{ui:SymbolIcon ArrowAutofitWidth24}"
+                               Margin="10,0,0,0" IsEnabled="{Binding CanResize}" Click="Resize_Click" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <ui:Button Content="Close" MinWidth="80" Click="Close_Click" />

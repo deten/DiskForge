@@ -24,7 +24,10 @@ public enum LayoutChangeKind
     Reletter = 5,
 
     /// <summary>The whole disk is about to be overwritten (clone target). Layout is unknown until then.</summary>
-    OverwriteDisk = 6
+    OverwriteDisk = 6,
+
+    /// <summary>An existing partition keeps its start but changes length, taking or releasing free space.</summary>
+    ResizePartition = 7
 }
 
 /// <summary>

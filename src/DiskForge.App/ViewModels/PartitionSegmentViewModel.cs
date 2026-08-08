@@ -113,7 +113,9 @@ public sealed class PartitionSegmentViewModel
             OutlineBrush = region.Pending switch
             {
                 PendingChange.None => Transparent,
-                PendingChange.Create or PendingChange.Modify => PlanOutline,
+                // A resize keeps the data, so it reads as a plan rather than a destructive act. The
+                // shrink/extend distinction is carried in the note and the pending list.
+                PendingChange.Create or PendingChange.Modify or PendingChange.Resize => PlanOutline,
                 _ => DangerOutline
             }
         };
@@ -126,6 +128,7 @@ public sealed class PartitionSegmentViewModel
         PendingChange.Reformat => "QUEUED · FORMAT",
         PendingChange.Modify => "QUEUED · CHANGE",
         PendingChange.Overwrite => "QUEUED · CLONE",
+        PendingChange.Resize => "QUEUED · RESIZE",
         _ => ""
     };
 

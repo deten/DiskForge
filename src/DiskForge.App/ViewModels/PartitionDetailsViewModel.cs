@@ -60,6 +60,8 @@ public partial class PartitionDetailsViewModel : ObservableObject
             if (!used.Contains(c.ToString())) letters.Add(c.ToString());
         AvailableLetters = new ObservableCollection<string>(letters.Distinct().OrderBy(x => x));
         _selectedLetter = _currentLetter?.ToUpperInvariant() ?? AvailableLetters.FirstOrDefault();
+
+        ComputeResizeBounds();
     }
 
     public string Header { get; }
@@ -95,6 +97,112 @@ public partial class PartitionDetailsViewModel : ObservableObject
     public List<IDiskOperation> StagedOps { get; } = new();
     public bool RequestFormat { get; private set; }
     public bool RequestDelete { get; private set; }
+
+    // ---------------------------------------------------------------- resize
+
+    /// <summary>
+    /// Resize is offered only where it can actually work. Windows resizes NTFS in place and nothing
+    /// else, so showing the control for exFAT or ext4 would just be a button that always errors.
+    /// </summary>
+    public bool CanResize { get; private set; }
+
+    public string ResizeBlockedReason { get; private set; } = "";
+
+    /// <summary>Smallest the partition can be, in MB: what the filesystem is using, rounded up.</summary>
+    public double MinResizeMb { get; private set; }
+
+    /// <summary>Largest it can be: its own size plus any free space directly after it.</summary>
+    public double MaxResizeMb { get; private set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ResizeSummary))]
+    private double _resizeMb;
+
+    public string ResizeSummary
+    {
+        get
+        {
+            if (!CanResize) return "";
+            var current = _part.SizeBytes / (1024.0 * 1024);
+            var delta = ResizeMb - current;
+            if (Math.Abs(delta) < 1) return "No change.";
+            return delta > 0
+                ? $"Extend by {delta:N0} MB, taking free space that follows this partition."
+                : $"Shrink by {-delta:N0} MB, releasing it as free space.";
+        }
+    }
+
+    /// <summary>Builds the resize op, or null with <see cref="StageError"/> set explaining the block.</summary>
+    public ResizePartitionOperation? BuildResizeOperation()
+    {
+        var op = new ResizePartitionOperation(new ResizePartitionSettings
+        {
+            DiskNumber = _disk.Number,
+            PartitionNumber = _part.PartitionNumber!.Value,
+            NewSizeBytes = (ulong)Math.Round(ResizeMb) * 1024 * 1024,
+            OffsetBytes = _part.OffsetBytes,
+            CurrentSizeBytes = _part.SizeBytes,
+            DriveLetter = _currentLetter,
+            AllowNonRemovable = AllowNonRemovable
+        });
+
+        var v = op.Validate(_state);
+        if (v.IsValid) return op;
+        StageError = string.Join(" ", v.Errors);
+        return null;
+    }
+
+    /// <summary>
+    /// Works out the resize bounds from the live layout. The maximum is this partition plus the
+    /// unallocated region that starts where it ends; free space anywhere else cannot be reached,
+    /// because a partition is one contiguous extent.
+    /// </summary>
+    private void ComputeResizeBounds()
+    {
+        var sizeMb = _part.SizeBytes / (1024.0 * 1024);
+        ResizeMb = sizeMb;   // start at the current size, so opening the dialog changes nothing
+
+        if (_part.PartitionNumber is null) { ResizeBlockedReason = "This region is not a partition."; return; }
+
+        var probe = new ResizePartitionOperation(new ResizePartitionSettings
+        {
+            DiskNumber = _disk.Number,
+            PartitionNumber = _part.PartitionNumber.Value,
+            // A deliberately impossible target, so only the non-geometry guards can reject it. This
+            // asks "could this partition ever be resized?" without assuming a particular new size.
+            NewSizeBytes = _part.SizeBytes + 1024 * 1024,
+            OffsetBytes = _part.OffsetBytes,
+            CurrentSizeBytes = _part.SizeBytes,
+            AllowNonRemovable = true
+        });
+
+        var validation = probe.Validate(_state);
+        var blocking = validation.Errors.FirstOrDefault(e =>
+            e.Contains("resize", StringComparison.OrdinalIgnoreCase) ||
+            e.Contains("filesystem", StringComparison.OrdinalIgnoreCase));
+
+        if (blocking is not null) { ResizeBlockedReason = blocking; return; }
+
+        var following = _disk.Partitions.FirstOrDefault(
+            p => p.IsUnallocated && p.OffsetBytes >= _part.EndBytes &&
+                 p.OffsetBytes - _part.EndBytes < 1024 * 1024);
+
+        var used = _part.Volume is { UsageKnown: true } vol ? vol.UsedBytes : 0;
+
+        MinResizeMb = Math.Max(8, Math.Ceiling(used / (1024.0 * 1024)));
+        MaxResizeMb = sizeMb + (following?.SizeBytes ?? 0) / (1024.0 * 1024);
+
+        // Nothing to drag if it cannot grow and cannot usefully shrink.
+        if (MaxResizeMb - MinResizeMb < 1)
+        {
+            ResizeBlockedReason =
+                "There is no free space directly after this partition to grow into, and it is too full " +
+                "to shrink.";
+            return;
+        }
+
+        CanResize = true;
+    }
 
     /// <summary>Builds label/letter ops for whatever the user changed. Returns false if nothing changed or invalid.</summary>
     public bool TryStageChanges()

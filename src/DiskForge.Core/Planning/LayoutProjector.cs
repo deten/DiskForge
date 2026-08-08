@@ -65,6 +65,7 @@ public static class LayoutProjector
                 case LayoutChangeKind.Relabel:
                 case LayoutChangeKind.Reletter: Modify(c, op); break;
                 case LayoutChangeKind.OverwriteDisk: Overwrite(c, op); break;
+                case LayoutChangeKind.ResizePartition: Resize(c, op); break;
             }
         }
 
@@ -169,6 +170,42 @@ public static class LayoutProjector
             };
             item.Pending = PendingChange.Reformat;
             item.Note = c.Note;
+            item.Op = op;
+        }
+
+        /// <summary>
+        /// The partition keeps its start and changes length. A grow is refused if it would run into the
+        /// next partition, for the same reason the operation itself refuses it: an extent is contiguous
+        /// and nothing here relocates a neighbour. The free space after it is recomputed at Build time.
+        /// </summary>
+        private void Resize(LayoutChange c, IDiskOperation op)
+        {
+            var item = Find(c);
+            if (item is null || c.NewSizeBytes == 0) return;
+
+            var end = item.Part.OffsetBytes + c.NewSizeBytes;
+            var collides = _items.Any(i => !ReferenceEquals(i, item) &&
+                                           item.Part.OffsetBytes < i.Part.EndBytes && end > i.Part.OffsetBytes);
+            if (collides || end > DiskMap.UsableEnd(_disk.SizeBytes, _disk.PartitionStyle)) return;
+
+            var shrinking = c.NewSizeBytes < item.Part.SizeBytes;
+            item.Part = item.Part with
+            {
+                SizeBytes = c.NewSizeBytes,
+                // The volume moves with the extent; its free space changes by the same amount.
+                Volume = item.Part.Volume is { } v && v.UsageKnown
+                    ? v with
+                    {
+                        SizeBytes = c.NewSizeBytes,
+                        FreeBytes = c.NewSizeBytes > v.UsedBytes ? c.NewSizeBytes - v.UsedBytes : 0
+                    }
+                    : item.Part.Volume
+            };
+
+            item.Pending = PendingChange.Resize;
+            item.Note = shrinking
+                ? $"{c.Note} (shrink)"
+                : $"{c.Note} (extend)";
             item.Op = op;
         }
 

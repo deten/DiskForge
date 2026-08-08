@@ -22,7 +22,10 @@ public enum PendingChange
     Modify = 4,
 
     /// <summary>A real partition on a disk a staged clone will overwrite wholesale.</summary>
-    Overwrite = 5
+    Overwrite = 5,
+
+    /// <summary>A real partition a staged resize will grow or shrink. Its data survives.</summary>
+    Resize = 6
 }
 
 /// <summary>One slice of a projected disk map: what would be there once the staged batch is applied.</summary>
