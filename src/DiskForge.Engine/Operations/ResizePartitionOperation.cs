@@ -233,7 +233,7 @@ public sealed class ResizePartitionOperation : IDiskOperation
         if (part.Kind == PartitionKind.Linux || (fs is not null && IsLinuxName(fs)))
             return $"Resizing {fs ?? "this Linux filesystem"} is not supported yet. Windows cannot resize " +
                    "it, and doing it properly needs the filesystem's own resize logic. ext2, ext3 and " +
-                   "ext4 can be grown. Otherwise back up, recreate the partition, and restore.";
+                   "ext4 can be resized. Otherwise back up, recreate the partition, and restore.";
 
         if (string.IsNullOrWhiteSpace(fs) || fs.Equals("RAW", StringComparison.OrdinalIgnoreCase))
             return "This partition has no filesystem Windows can read, so it cannot be resized safely. " +
