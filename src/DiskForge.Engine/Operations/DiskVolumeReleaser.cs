@@ -51,6 +51,69 @@ public static class DiskVolumeReleaser
     }
 
     /// <summary>
+    /// Flushes every mounted volume on <paramref name="disk"/> so a raw read of it sees writes that
+    /// Windows has acknowledged but not yet committed. Read-only in effect: nothing is dismounted and
+    /// no open handle is disturbed. Best-effort and never throws.
+    /// </summary>
+    public static IReadOnlyList<string> FlushVolumes(PhysicalDiskInfo disk)
+    {
+        var log = new List<string>();
+        foreach (var path in VolumePathsOn(disk).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (VolumeControl.Flush(path))
+            {
+                log.Add($"Disk {disk.Number}: flushed {path}.");
+                Log.Information("Flushed volume {Volume} on disk {Disk}", path, disk.Number);
+            }
+            else
+            {
+                log.Add($"Disk {disk.Number}: could not flush {path}.");
+                Log.Warning("Could not flush volume {Volume} on disk {Disk}", path, disk.Number);
+            }
+        }
+        return log;
+    }
+
+    /// <summary>
+    /// Releases every volume on <paramref name="disk"/> and <b>keeps them released</b> until the
+    /// returned object is disposed. Use this instead of <see cref="Release(PhysicalDiskInfo)"/> for a
+    /// write that runs long enough for Windows to remount underneath it — a whole-disk clone being the
+    /// case that matters. Never throws; inspect <see cref="HeldDiskVolumes.AllHeld"/> to see whether
+    /// every volume actually came down.
+    /// </summary>
+    public static HeldDiskVolumes Hold(PhysicalDiskInfo disk)
+        => Hold(VolumePathsOn(disk), disk.Number);
+
+    public static HeldDiskVolumes Hold(IEnumerable<string> volumePaths, int diskNumber)
+    {
+        var held = new List<HeldVolume>();
+        var log = new List<string>();
+
+        foreach (var path in volumePaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var h = VolumeControl.Hold(path);
+            held.Add(h);
+
+            if (h.IsHeld)
+            {
+                log.Add($"Disk {diskNumber}: locked and dismounted {h.VolumePath} for the duration.");
+                Log.Information("Holding volume {Volume} on disk {Disk}", h.VolumePath, diskNumber);
+            }
+            else
+            {
+                var what = h.Dismounted ? "dismounted but could not lock" : "could not release";
+                log.Add($"Disk {diskNumber}: {what} {h.VolumePath}" +
+                        (h.Error is null ? "." : $" — {h.Error}."));
+                Log.Warning("Could not fully hold volume {Volume} on disk {Disk}: {Error}",
+                    h.VolumePath, diskNumber, h.Error ?? what);
+            }
+        }
+
+        if (held.Count == 0) log.Add($"Disk {diskNumber} had no mounted volumes to release.");
+        return new HeldDiskVolumes(held, log);
+    }
+
+    /// <summary>
     /// Makes Windows re-read the disk after we have changed it, so the volume layer stops serving a
     /// stale cached layout (the classic symptom being a drive letter still pointing at a filesystem
     /// that no longer exists, reported as 0 bytes). Best-effort and never throws.
@@ -77,5 +140,33 @@ public static class DiskVolumeReleaser
             else if (part.DriveLetter is { Length: > 0 } letter) paths.Add(letter);
         }
         return paths;
+    }
+}
+
+/// <summary>
+/// The volumes of one disk, kept locked and dismounted until this is disposed.
+/// </summary>
+public sealed class HeldDiskVolumes : IDisposable
+{
+    private readonly IReadOnlyList<HeldVolume> _held;
+
+    internal HeldDiskVolumes(IReadOnlyList<HeldVolume> held, IReadOnlyList<string> log)
+    {
+        _held = held;
+        Log = log;
+    }
+
+    /// <summary>Human-readable lines describing what happened to each volume.</summary>
+    public IReadOnlyList<string> Log { get; }
+
+    /// <summary>True when every volume is locked and dismounted, so none can remount mid-write.</summary>
+    public bool AllHeld => _held.All(h => h.IsHeld);
+
+    /// <summary>The volumes that could not be fully held, for a caller that wants to name them.</summary>
+    public IReadOnlyList<string> NotHeld => _held.Where(h => !h.IsHeld).Select(h => h.VolumePath).ToList();
+
+    public void Dispose()
+    {
+        foreach (var h in _held) h.Dispose();
     }
 }

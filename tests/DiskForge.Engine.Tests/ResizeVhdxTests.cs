@@ -16,6 +16,7 @@ namespace DiskForge.Engine.Tests;
 ///
 /// Elevated-only: VHDX attach needs Administrator, so this auto-skips in an unelevated run.
 /// </summary>
+[Collection(RealDiskCollection.Name)]
 public class ResizeVhdxTests
 {
     private const ulong MB = 1024UL * 1024;

@@ -10,6 +10,7 @@ namespace DiskForge.Engine.Tests;
 /// <see cref="DiskCloneEngine"/>, and proves the target is byte-identical via the same hash the verify
 /// pass uses. Elevated-only: VHDX attach needs Administrator, so it auto-skips otherwise.
 /// </summary>
+[Collection(RealDiskCollection.Name)]
 public class CloneVhdxTests
 {
     private const ulong MB = 1024UL * 1024;

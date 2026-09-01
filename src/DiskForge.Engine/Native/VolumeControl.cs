@@ -75,6 +75,90 @@ public static class VolumeControl
     }
 
     /// <summary>
+    /// Forces a volume to write its cached data to disk, without dismounting it or invalidating
+    /// anyone's open handles.
+    ///
+    /// This matters for any raw read of a live disk. NTFS acknowledges a write long before the lazy
+    /// writer commits the file data and its MFT record, so a sector-level copy started moments after a
+    /// file was written can legitimately read a filesystem that does not contain that file. It is not
+    /// a theoretical race: a clone taken immediately after writing a file arrived on the target without
+    /// it. Locking the volume would also flush, but a lock fails whenever anything has a file open,
+    /// which on a real source is most of the time. Flushing the volume handle works regardless.
+    ///
+    /// This does not replace a VSS snapshot. It makes the copy consistent as of the moment it starts
+    /// rather than missing writes that had already been acknowledged; anything written <i>during</i>
+    /// the copy is still only crash-consistent.
+    /// </summary>
+    public static bool Flush(string volumePath)
+    {
+        var path = Normalize(volumePath);
+        if (path is null) return false;
+
+        try
+        {
+            using var handle = CreateFile(
+                path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+
+            return !handle.IsInvalid && FlushFileBuffers(handle);
+        }
+        catch
+        {
+            return false; // best effort: never fail an operation over a flush
+        }
+    }
+
+    /// <summary>
+    /// Locks and dismounts a volume and <b>keeps holding it</b> until the returned object is disposed.
+    ///
+    /// <see cref="Dismount"/> closes its handle immediately, which releases the lock and lets Windows
+    /// remount the volume the moment anything touches it. That is fine for diskpart and mkfs, which
+    /// rewrite the partition table in one short burst, but not for a clone: that write covers every
+    /// sector of the disk and runs for minutes, so a volume remounting midway turns the rest of the
+    /// copy into ERROR_ACCESS_DENIED. Holding the lock for the whole write is what stops that.
+    /// </summary>
+    public static HeldVolume Hold(string volumePath)
+    {
+        var path = Normalize(volumePath);
+        if (path is null)
+            return new HeldVolume(volumePath, null, false, false, "not a recognisable volume path");
+
+        SafeFileHandle? handle = null;
+        try
+        {
+            handle = CreateFile(
+                path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+
+            if (handle.IsInvalid)
+            {
+                var err = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                return new HeldVolume(path, null, false, false, $"could not open the volume (win32 {err})");
+            }
+
+            var locked = TryLock(handle);
+            var dismounted = DeviceIoControl(
+                handle, FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+
+            if (!dismounted)
+            {
+                var err = Marshal.GetLastWin32Error();
+                // Keep the handle even so: an unlockable, undismountable volume is still less dangerous
+                // held than released, and the caller decides whether to continue.
+                return new HeldVolume(path, handle, locked, false, $"dismount failed (win32 {err})");
+            }
+
+            return new HeldVolume(path, handle, locked, true, null);
+        }
+        catch (Exception ex)
+        {
+            handle?.Dispose();
+            return new HeldVolume(path, null, false, false, ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Tells Windows to re-read a disk's partition table.
     ///
     /// Without this, the volume layer keeps serving what it cached before the write: a drive letter
@@ -140,7 +224,43 @@ public static class VolumeControl
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool FlushFileBuffers(SafeFileHandle hFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DeviceIoControl(
         SafeFileHandle hDevice, uint dwIoControlCode, IntPtr lpInBuffer, int nInBufferSize,
         IntPtr lpOutBuffer, int nOutBufferSize, out uint lpBytesReturned, IntPtr lpOverlapped);
+}
+
+/// <summary>
+/// A volume kept locked and dismounted for the lifetime of this object. Disposing it closes the
+/// handle, which drops the lock and lets Windows mount the volume again.
+/// </summary>
+public sealed class HeldVolume : IDisposable
+{
+    private SafeFileHandle? _handle;
+
+    internal HeldVolume(string volumePath, SafeFileHandle? handle, bool locked, bool dismounted, string? error)
+    {
+        VolumePath = volumePath;
+        _handle = handle;
+        Locked = locked;
+        Dismounted = dismounted;
+        Error = error;
+    }
+
+    public string VolumePath { get; }
+    public bool Locked { get; }
+    public bool Dismounted { get; }
+    public string? Error { get; }
+
+    /// <summary>True when the volume is both locked and dismounted, i.e. it cannot come back under us.</summary>
+    public bool IsHeld => Locked && Dismounted;
+
+    public void Dispose()
+    {
+        _handle?.Dispose();
+        _handle = null;
+    }
 }

@@ -175,11 +175,16 @@ public sealed class CloneDiskOperation : IDiskOperation
 
         var s = Settings;
         var source = state.FindDisk(s.SourceDiskNumber)!;
+        var target = state.FindDisk(s.TargetDiskNumber)!;
         var copyBytes = CopyExtentBytes(source);
 
         var steps = new List<string>
         {
-            $"Take target disk {s.TargetDiskNumber} offline (releases its volumes).",
+            target.IsRemovable
+                ? $"Lock and dismount disk {s.TargetDiskNumber}'s volumes for the duration " +
+                  "(removable media cannot be taken offline)."
+                : $"Take target disk {s.TargetDiskNumber} offline (releases its volumes).",
+            $"Flush disk {s.SourceDiskNumber}'s pending writes so the copy sees them.",
             $"Copy {Bytes((ulong)copyBytes)} from disk {s.SourceDiskNumber} to disk {s.TargetDiskNumber} " +
             $"({(s.Method == CloneMethod.FullSector ? "every sector" : "up to the last partition")}).",
         };
@@ -189,7 +194,9 @@ public sealed class CloneDiskOperation : IDiskOperation
             steps.Add("Re-read the target and compare SHA-256 against what was written (verify).");
         if (s.MakeBootable && ClassifyBoot(source) == BootHandling.RebuildBootFiles)
             steps.Add("Rebuild boot files on the clone's EFI System Partition (bcdboot).");
-        steps.Add($"Bring disk {s.TargetDiskNumber} back online.");
+        steps.Add(target.IsRemovable
+            ? $"Release disk {s.TargetDiskNumber}'s volumes and make Windows re-read the new layout."
+            : $"Bring disk {s.TargetDiskNumber} back online.");
 
         return new SimulationResult { Feasible = true, PlannedSteps = steps, Warnings = validation.Warnings };
     }
@@ -214,10 +221,52 @@ public sealed class CloneDiskOperation : IDiskOperation
 
         try
         {
-            progress.Report(new OpProgress("Taking target offline…", 0.02, Describe().Title));
-            var offline = await SetDiskStateAsync(target.Number, offlineFlag: true, ct).ConfigureAwait(false);
-            if (!offline.Success)
-                return OpResult.Failed($"Could not take target disk {target.Number} offline: {offline.Error}");
+            // Windows denies raw sector writes that land inside a mounted volume's extents, and a
+            // whole-disk clone lands inside every one of them. Taking the disk offline is the cleanest
+            // release and is what RawDiskAccess's docs assume — but Windows refuses it outright for
+            // removable media ("Removable media cannot be set to offline"), which is DiskForge's
+            // default-allowed target. Removable disks therefore hold each volume's lock for the whole
+            // copy instead. A plain dismount is not enough here: it lets the volume remount the moment
+            // anything touches it, and a clone runs for minutes.
+            progress.Report(new OpProgress("Releasing the target's volumes…", 0.02, Describe().Title));
+
+            var tookOffline = false;
+            HeldDiskVolumes? held = null;
+
+            if (!target.IsRemovable)
+            {
+                var offline = await SetDiskStateAsync(target.Number, offlineFlag: true, ct).ConfigureAwait(false);
+                tookOffline = offline.Success;
+                if (!tookOffline)
+                    Log.Warning("Could not take target disk {Disk} offline ({Error}); " +
+                                "holding its volume locks instead", target.Number, offline.Error);
+            }
+
+            if (!tookOffline)
+            {
+                held = DiskVolumeReleaser.Hold(target);
+                foreach (var line in held.Log) Log.Information("{Line}", line);
+
+                // Fail closed. A clone that starts without every volume released dies part-way with
+                // ERROR_ACCESS_DENIED and leaves a target that looks like a disk but is not one.
+                if (!held.AllHeld)
+                {
+                    held.Dispose();
+                    return OpResult.Failed(
+                        $"Could not release {string.Join(", ", held.NotHeld)} on target disk {target.Number}. " +
+                        "Windows refuses to write sectors underneath a mounted volume, so the clone would " +
+                        "fail part-way and leave the target unusable. Close anything using that disk " +
+                        "(Explorer windows, backup agents, antivirus scans) and try again.");
+                }
+            }
+
+            // Commit the source's pending writes before reading a single sector. NTFS acknowledges a
+            // write well before the lazy writer puts it on the platter, so a copy started moments after
+            // a file was saved can read a filesystem that does not contain that file. This is not
+            // hypothetical: it produced a clone that verified byte-perfect and was missing the file
+            // written to the source seconds earlier. It does not replace VSS — writes made *during* the
+            // copy are still only crash-consistent — but it removes the surprise at the start.
+            foreach (var line in DiskVolumeReleaser.FlushVolumes(source)) Log.Information("{Line}", line);
 
             try
             {
@@ -244,8 +293,15 @@ public sealed class CloneDiskOperation : IDiskOperation
             }
             finally
             {
-                // Bring the disk back online whatever happened, so we never leave it stranded offline.
-                await SetDiskStateAsync(target.Number, offlineFlag: false, ct).ConfigureAwait(false);
+                // Release whichever hold we took, whatever happened, so the disk is never left stranded
+                // offline or with its volumes locked out.
+                held?.Dispose();
+                if (tookOffline)
+                    await SetDiskStateAsync(target.Number, offlineFlag: false, ct).ConfigureAwait(false);
+
+                // The clone rewrote the partition table; without this Windows keeps serving the volume
+                // layout it cached before the copy.
+                DiskVolumeReleaser.Refresh(target.Number);
             }
 
             if (s.RegenerateDiskIdentity)
@@ -323,9 +379,26 @@ public sealed class CloneDiskOperation : IDiskOperation
             (offlineFlag ? "" : $"Set-Disk -Number {diskNumber} -IsReadOnly $false; ") + "'DISKFORGE_OK'",
             ct);
 
+    /// <summary>
+    /// Gives the clone its own disk identity so it does not collide with the source when both are
+    /// attached. Which identity that is depends on the partition table, and the original version of
+    /// this method only knew about one of them: <c>Set-Disk -Guid</c> is GPT-only, so on an MBR clone
+    /// it failed and left the duplicate signature in place.
+    ///
+    /// The disk is brought online first where possible, because a collision is exactly what makes
+    /// Windows take the clone offline, and an offline disk refuses the very command that would fix it.
+    /// Removable media cannot be onlined at all, so that step is best-effort.
+    /// </summary>
     private static Task<(bool Success, string Error)> RegenerateIdentityAsync(int diskNumber, CancellationToken ct)
         => RunPsAsync(
-            $"$ErrorActionPreference='Stop'; Set-Disk -Number {diskNumber} -Guid ([guid]::NewGuid()); 'DISKFORGE_OK'",
+            "$ErrorActionPreference='Stop'; " +
+            $"$n = {diskNumber}; " +
+            "try { if ((Get-Disk -Number $n).IsOffline) { Set-Disk -Number $n -IsOffline $false } } catch { } " +
+            "$style = (Get-Disk -Number $n).PartitionStyle; " +
+            "if ($style -eq 'MBR') { Set-Disk -Number $n -Signature (Get-Random -Minimum 1 -Maximum 2147483647) } " +
+            "elseif ($style -eq 'GPT') { Set-Disk -Number $n -Guid ([guid]::NewGuid()) } " +
+            "else { throw \"Disk $n has no partition table, so there is no identity to regenerate.\" } " +
+            "'DISKFORGE_OK'",
             ct);
 
     private static async Task<(bool Success, string Error)> RunPsAsync(string script, CancellationToken ct)

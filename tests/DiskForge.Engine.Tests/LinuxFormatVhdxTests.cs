@@ -14,6 +14,7 @@ namespace DiskForge.Engine.Tests;
 /// Elevated-only (VHDX attach and <c>wsl --mount</c> both need Administrator) and toolchain-gated, so
 /// they skip with a reason rather than failing on a machine without the tools.
 /// </summary>
+[Collection(RealDiskCollection.Name)]
 public class LinuxFormatVhdxTests
 {
     private const ulong MB = 1024UL * 1024;
@@ -97,8 +98,15 @@ public class LinuxFormatVhdxTests
         Assert.Equal(PartitionKind.Linux, created.Kind);
         Assert.Null(created.DriveLetter);
 
-        // Windows reporting no volume here is correct behaviour, not a failure.
-        Assert.Null(created.Volume);
+        // Windows itself cannot mount this, but DiskForge synthesizes a volume from the superblock so
+        // the partition does not display as a nameless RAW block (StorageEnumerator.AttachLinuxFilesystems).
+        // The flag is the load-bearing part: without MountedByWindows = false the UI would offer a
+        // Windows-side rename and drive letter that cannot possibly work.
+        Assert.NotNull(created.Volume);
+        Assert.Equal("ext4", created.Volume!.FileSystem);
+        Assert.Equal("DFEXT4", created.Volume!.Label);
+        Assert.False(created.Volume!.MountedByWindows);
+        Assert.False(created.Volume!.UsageKnown);
 
         Assert.Equal("ext4", await ReadTypeAsync(after, created, FileSystemType.Ext4));
     }
@@ -287,7 +295,7 @@ public class LinuxFormatVhdxTests
     /// offline after a failed WSL attach — so the format has to bring it back online rather than
     /// stranding the user in a state the app created.
     /// </summary>
-    [RequiresLinuxToolchainFact]
+    [RequiresLinuxToolchainFact(verifiesWithBlkid: false)]
     public async Task FormatVolume_BringsAnOfflineDiskOnline_InsteadOfFailing()
     {
         using var vhdx = new VhdxLoopbackDisk(DiskSize);

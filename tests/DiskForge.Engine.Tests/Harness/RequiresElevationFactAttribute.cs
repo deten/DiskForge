@@ -15,3 +15,16 @@ public sealed class RequiresElevationFactAttribute : FactAttribute
             Skip = "Requires Administrator (VHDX attach). Run: right-click PowerShell > Run as administrator, then 'dotnet test'.";
     }
 }
+
+/// <summary>
+/// The <see cref="TheoryAttribute"/> twin of <see cref="RequiresElevationFactAttribute"/>, so a matrix
+/// of elevated cases skips as one rather than needing a fact per row.
+/// </summary>
+public sealed class RequiresElevationTheoryAttribute : TheoryAttribute
+{
+    public RequiresElevationTheoryAttribute()
+    {
+        if (!Elevation.IsElevated())
+            Skip = "Requires Administrator (VHDX attach). Run: right-click PowerShell > Run as administrator, then 'dotnet test'.";
+    }
+}

@@ -11,6 +11,7 @@ namespace DiskForge.Engine.Tests;
 /// PowerShell) plus the real enumeration used by Verify, which unit tests cannot reach.
 /// Elevated-only: VHDX attach needs Administrator, so they auto-skip in an unelevated run.
 /// </summary>
+[Collection(RealDiskCollection.Name)]
 public class PartitionWriteOpsVhdxTests
 {
     private const ulong MB = 1024UL * 1024;

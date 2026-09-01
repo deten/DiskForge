@@ -4,6 +4,7 @@ using DiskForge.Engine.Virtual;
 
 namespace DiskForge.Engine.Tests;
 
+[Collection(RealDiskCollection.Name)]
 public class VirtualDiskTests
 {
     /// <summary>Creating a VHDX file does not require elevation — validates the create interop everywhere.</summary>
