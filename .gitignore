@@ -54,3 +54,4 @@ RUNNING_NOTES.md
 # Elevated-runner scratch: queued/quarantined jobs and their in-flight output
 scratchpad/jobs-quarantine/
 scratchpad/*.tmp
+scratchpad/dumps/
