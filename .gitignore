@@ -50,3 +50,7 @@ scratchpad/jobs-done/
 CLAUDE.md
 CLAUDE_CODE_PROMPT.md
 RUNNING_NOTES.md
+
+# Elevated-runner scratch: queued/quarantined jobs and their in-flight output
+scratchpad/jobs-quarantine/
+scratchpad/*.tmp
