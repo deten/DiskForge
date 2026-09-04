@@ -244,10 +244,18 @@
                                    VerticalAlignment="Center" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <!-- Global dry-run switch. While on, Apply can only simulate. -->
+                        <ui:ToggleSwitch Content="Dry run" IsChecked="{Binding DryRun}" Margin="0,0,14,0"
+                                         VerticalAlignment="Center"
+                                         ToolTip="While on, Apply shows what it would do and writes nothing. Resets to off each launch." />
                         <ui:Button Content="Clear" ToolTip="Discard the whole batch and go back to what is really on the disks."
                                    Command="{Binding ClearPendingCommand}" MinWidth="80" />
-                        <ui:Button Content="Apply" Appearance="Danger" Margin="10,0,0,0" MinWidth="120"
+                        <ui:Button Content="Simulate" Margin="10,0,0,0" MinWidth="100"
+                                   ToolTip="Dry run: validate and plan every staged operation in order, against the layout the earlier ones would leave, and show the steps. Nothing is written. Works even when Apply is blocked, so you can see why."
+                                   Command="{Binding SimulateCommand}" />
+                        <ui:Button Content="{Binding ApplyButtonText}" Appearance="Danger" Margin="10,0,0,0" MinWidth="120"
                                    IsEnabled="{Binding CanApplyBatch}"
+                                   ToolTip="{Binding ApplyToolTip}"
                                    ToolTipService.ShowOnDisabled="True"
                                    Command="{Binding ApplyCommand}" />
                     </StackPanel>

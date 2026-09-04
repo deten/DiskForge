@@ -8,8 +8,8 @@
                  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
                  mc:Ignorable="d"
                  d:DataContext="{d:DesignInstance vm:ApplyViewModel}"
-                 Title="Apply operations" Height="560" Width="560"
-                 WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+                 Title="{Binding WindowTitle}" Height="560" Width="600"
+                 WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
                  ExtendsContentIntoTitleBar="True" WindowBackdropType="Mica">
 
     <ui:FluentWindow.Resources>
@@ -23,7 +23,7 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="Apply operations" />
+        <ui:TitleBar Grid.Row="0" Title="{Binding WindowTitle}" />
 
         <Grid Grid.Row="1" Margin="24,8">
             <!-- CONFIRM -->
@@ -66,14 +66,35 @@
                 <TextBlock Text="{Binding StatusText}" HorizontalAlignment="Center" Opacity="0.8" TextWrapping="Wrap" />
             </StackPanel>
 
-            <!-- DONE -->
-            <StackPanel Visibility="{Binding IsDone, Converter={StaticResource BoolToVis}}">
-                <TextBlock Text="Results" FontSize="18" FontWeight="SemiBold" />
-                <Border Margin="0,10,0,0" CornerRadius="8" Padding="14,12" Background="#0DFFFFFF"
-                        BorderBrush="#1FFFFFFF" BorderThickness="1">
-                    <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" FontSize="13" LineHeight="20" />
+            <!-- DONE (also the whole of a simulation: it opens straight onto its results) -->
+            <Grid Visibility="{Binding IsDone, Converter={StaticResource BoolToVis}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Text="{Binding ResultsHeading}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
+
+                <!-- Dry-run banner: says plainly that nothing touched a disk. -->
+                <Border Grid.Row="1" Margin="0,10,0,0" CornerRadius="8" Padding="14,10"
+                        Background="#2638BDF8" BorderBrush="#6638BDF8" BorderThickness="1"
+                        Visibility="{Binding IsSimulation, Converter={StaticResource BoolToVis}}">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Beaker24" Foreground="#7DD3FC" VerticalAlignment="Center" />
+                        <TextBlock Text="Dry run. This is what Apply would do; no disk was written."
+                                   Foreground="#7DD3FC" Margin="10,0,0,0" FontWeight="SemiBold"
+                                   TextWrapping="Wrap" VerticalAlignment="Center" />
+                    </StackPanel>
                 </Border>
-            </StackPanel>
+
+                <Border Grid.Row="2" Margin="0,10,0,0" CornerRadius="8" Padding="14,12" Background="#0DFFFFFF"
+                        BorderBrush="#1FFFFFFF" BorderThickness="1">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" FontSize="13" LineHeight="20"
+                                   FontFamily="Cascadia Mono, Consolas, Segoe UI" />
+                    </ScrollViewer>
+                </Border>
+            </Grid>
         </Grid>
 
         <Border Grid.Row="2" Background="#0AFFFFFF" Padding="24,14">

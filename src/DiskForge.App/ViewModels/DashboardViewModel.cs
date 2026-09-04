@@ -60,6 +60,23 @@ public partial class DashboardViewModel : ObservableObject
     public string PendingSummary => PendingOps.Count == 1 ? "1 pending operation" : $"{PendingOps.Count} pending operations";
 
     [ObservableProperty] private bool _isBusy;
+
+    /// <summary>
+    /// The global dry-run switch (spec §1, Phase 1). While it is on, Apply opens the simulation instead
+    /// of the executor, so no path out of this screen can write to a disk. It is session state, not a
+    /// setting: it resets to off every launch so a forgotten toggle can never make a real Apply
+    /// silently do nothing.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ApplyButtonText))]
+    [NotifyPropertyChangedFor(nameof(ApplyToolTip))]
+    private bool _dryRun;
+
+    public string ApplyButtonText => DryRun ? "Apply (dry run)" : "Apply";
+
+    public string ApplyToolTip => DryRun
+        ? "Dry run is on: this shows what Apply would do and writes nothing. Turn dry run off to apply for real."
+        : "Write the staged batch to the disks. You will confirm in the next dialog.";
     [ObservableProperty] private bool _isElevated;
     [ObservableProperty] private string _elevationText = "Checking privileges…";
     [ObservableProperty] private string _capturedText = "";
@@ -314,10 +331,29 @@ public partial class DashboardViewModel : ObservableObject
     [RelayCommand]
     private void ClearPending() => PendingOps.Clear();
 
+    /// <summary>
+    /// The dry run. Runs every staged operation's Validate and Simulate, in Apply order, each against the
+    /// layout the ones before it would leave, and shows the plan. Zero writes, no elevation needed, and
+    /// the batch is untouched afterwards. Available even when Apply is disabled: seeing *why* an
+    /// operation is blocked is the point.
+    /// </summary>
+    [RelayCommand]
+    private void Simulate()
+    {
+        if (!HasPending || _lastState is null) return;
+
+        var ops = PendingOps.Select(p => p.Operation).ToList();
+        var vm = new ApplyViewModel(ops, simulateAgainst: _lastState);
+        new ApplyWindow(vm) { Owner = Application.Current.MainWindow }.ShowDialog();
+    }
+
     [RelayCommand]
     private async Task ApplyAsync()
     {
         if (!CanApplyBatch) return;
+
+        // The global switch wins over the button: with dry run on there is no way to write from here.
+        if (DryRun) { Simulate(); return; }
 
         var ops = PendingOps.Select(p => p.Operation).ToList();
         var applyVm = new ApplyViewModel(ops);

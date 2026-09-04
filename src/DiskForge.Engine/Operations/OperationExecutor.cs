@@ -10,6 +10,9 @@ public sealed class OperationRunResult
     public required bool Success { get; init; }
     public string? Error { get; init; }
     public VerifyResult? Verify { get; init; }
+
+    /// <summary>Output the operation wants shown (a chkdsk transcript, for instance), success or not.</summary>
+    public string? Report { get; init; }
 }
 
 public sealed record ApplyProgress(int OperationIndex, int OperationCount, string Title, OpProgress Step);
@@ -68,7 +71,10 @@ public sealed class OperationExecutor
 
             if (!opResult.Success)
             {
-                results.Add(new OperationRunResult { Operation = op, Success = false, Error = opResult.Error });
+                results.Add(new OperationRunResult
+                {
+                    Operation = op, Success = false, Error = opResult.Error, Report = opResult.Report
+                });
                 Log.Warning("Aborting batch at op {Index} ({Title}): {Error}", i, title, opResult.Error);
                 break;
             }
@@ -81,6 +87,7 @@ public sealed class OperationExecutor
             {
                 Operation = op, Success = true,
                 Verify = verify,
+                Report = opResult.Report,
                 Error = verify.Verified ? null : "Completed but verification warned: " + string.Join(" ", verify.Findings)
             });
         }

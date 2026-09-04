@@ -60,6 +60,18 @@ public partial class PartitionDetailsWindow : FluentWindow
         Close();
     }
 
+    private void Check_Click(object sender, System.Windows.RoutedEventArgs e) => StageCheck(repair: false);
+    private void Repair_Click(object sender, System.Windows.RoutedEventArgs e) => StageCheck(repair: true);
+
+    private void StageCheck(bool repair)
+    {
+        // Only close on a valid op; otherwise StageError explains the block and the dialog stays open.
+        if (_viewModel.BuildCheckOperation(repair) is not { } op) return;
+        _viewModel.StagedOps.Add(op);
+        DialogResult = true;
+        Close();
+    }
+
     private void Close_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         DialogResult = false;

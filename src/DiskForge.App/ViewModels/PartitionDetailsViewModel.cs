@@ -62,6 +62,7 @@ public partial class PartitionDetailsViewModel : ObservableObject
         _selectedLetter = _currentLetter?.ToUpperInvariant() ?? AvailableLetters.FirstOrDefault();
 
         ComputeResizeBounds();
+        ComputeCheckEligibility();
     }
 
     public string Header { get; }
@@ -77,7 +78,7 @@ public partial class PartitionDetailsViewModel : ObservableObject
     public bool CanDelete => DeletableKind && (DiskIsRemovable || AllowNonRemovable);
 
     /// <summary>Shows the internal-disk acknowledgment only where it is actually needed.</summary>
-    public bool ShowInternalDiskGate => DeletableKind && !DiskIsRemovable;
+    public bool ShowInternalDiskGate => (DeletableKind || RepairKindOk) && !DiskIsRemovable;
 
     public ObservableCollection<string> AvailableLetters { get; }
 
@@ -86,6 +87,7 @@ public partial class PartitionDetailsViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanDelete))]
+    [NotifyPropertyChangedFor(nameof(CanRepair))]
     private bool _allowNonRemovable;
 
     [ObservableProperty]
@@ -248,6 +250,66 @@ public partial class PartitionDetailsViewModel : ObservableObject
     public void RequestFormatNow() => RequestFormat = true;
 
     public void RequestDeleteNow() => RequestDelete = true;
+
+    /// <summary>A read-only chkdsk is offered wherever Windows has the volume mounted, system disk included.</summary>
+    public bool CanCheck { get; private set; }
+
+    /// <summary>Why neither check nor repair is offered, or empty.</summary>
+    public string CheckBlockedReason { get; private set; } = "";
+
+    /// <summary>Repair is a write, so it follows the write ladder: never the system disk, removable-only
+    /// unless acknowledged. Computed by asking the operation itself, not by duplicating its rules here.</summary>
+    public bool CanRepair => RepairKindOk && (DiskIsRemovable || AllowNonRemovable);
+
+    private bool RepairKindOk { get; set; }
+
+    private void ComputeCheckEligibility()
+    {
+        if (_part.PartitionNumber is null) { CheckBlockedReason = "This region is not a partition."; return; }
+
+        var check = new CheckFilesystemOperation(new CheckFilesystemSettings
+        {
+            DiskNumber = _disk.Number,
+            PartitionNumber = _part.PartitionNumber.Value,
+            OffsetBytes = _part.OffsetBytes,
+            DriveLetter = _currentLetter
+        }).Validate(_state);
+        CanCheck = check.IsValid;
+        if (!check.IsValid) { CheckBlockedReason = string.Join(" ", check.Errors); return; }
+
+        // Probe repair with the internal-disk acknowledgment granted, to learn whether anything *else*
+        // blocks it; the checkbox then decides the final answer at click time.
+        var repair = new CheckFilesystemOperation(new CheckFilesystemSettings
+        {
+            DiskNumber = _disk.Number,
+            PartitionNumber = _part.PartitionNumber.Value,
+            OffsetBytes = _part.OffsetBytes,
+            DriveLetter = _currentLetter,
+            Repair = true,
+            AllowNonRemovable = true
+        }).Validate(_state);
+        RepairKindOk = repair.IsValid;
+    }
+
+    /// <summary>Builds a check or repair op, or null with <see cref="StageError"/> set explaining the block.</summary>
+    public CheckFilesystemOperation? BuildCheckOperation(bool repair)
+    {
+        var op = new CheckFilesystemOperation(new CheckFilesystemSettings
+        {
+            DiskNumber = _disk.Number,
+            PartitionNumber = _part.PartitionNumber!.Value,
+            OffsetBytes = _part.OffsetBytes,
+            DriveLetter = _currentLetter,
+            Repair = repair,
+            // Never auto-granted: the user must tick the internal-disk acknowledgment themselves.
+            AllowNonRemovable = AllowNonRemovable
+        });
+
+        var v = op.Validate(_state);
+        if (v.IsValid) return op;
+        StageError = string.Join(" ", v.Errors);
+        return null;
+    }
 
     /// <summary>Builds the delete op for this partition, carrying the offset so a shifted partition
     /// number cannot silently retarget it at Apply time. Returns null when validation blocks it.</summary>

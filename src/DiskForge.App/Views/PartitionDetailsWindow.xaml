@@ -89,14 +89,36 @@
                                TextWrapping="Wrap" />
                 </Border>
 
-                <!-- Internal-disk override for the destructive Delete task -->
+                <!-- Filesystem health: a read-only chkdsk anywhere Windows has the volume mounted, and a
+                     repair that follows the write ladder. Both stage into the batch like every other op. -->
+                <Border Margin="0,16,0,0" CornerRadius="8" Padding="12,10" Background="#0DFFFFFF"
+                        BorderBrush="#1FFFFFFF" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock Text="Filesystem health" FontWeight="SemiBold" />
+                        <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap"
+                                   Text="Check runs a read-only chkdsk and reports what it finds. Repair runs chkdsk /f, which dismounts the volume for the duration and corrects errors in place. Both are staged and run at Apply." />
+                        <TextBlock Margin="0,6,0,0" FontSize="12" Foreground="#FCA5A5" TextWrapping="Wrap"
+                                   Text="{Binding CheckBlockedReason}"
+                                   Visibility="{Binding CanCheck, Converter={StaticResource BoolToVisInverse}}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <ui:Button x:Name="CheckButton" Content="Check (read-only)" Icon="{ui:SymbolIcon Stethoscope24}"
+                                       IsEnabled="{Binding CanCheck}" Click="Check_Click" />
+                            <ui:Button x:Name="RepairButton" Content="Repair" Icon="{ui:SymbolIcon Wrench24}"
+                                       Margin="10,0,0,0" IsEnabled="{Binding CanRepair}" Click="Repair_Click"
+                                       ToolTipService.ShowOnDisabled="True"
+                                       ToolTip="chkdsk /f. Refused on the system disk, and on an internal disk until acknowledged below." />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Internal-disk override for the write tasks (Delete, Repair) -->
                 <Border Margin="0,16,0,0" CornerRadius="8" Padding="12,10"
                         Background="#26EF4444" BorderBrush="#66EF4444" BorderThickness="1"
                         Visibility="{Binding ShowInternalDiskGate, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
                         <TextBlock Text="⚠ This partition is on an INTERNAL, non-removable disk." Foreground="#FCA5A5"
                                    FontWeight="SemiBold" TextWrapping="Wrap" />
-                        <CheckBox Content="I understand — allow deleting this partition"
+                        <CheckBox Content="I understand — allow deleting or repairing this partition"
                                   IsChecked="{Binding AllowNonRemovable}" Margin="0,6,0,0" />
                     </StackPanel>
                 </Border>

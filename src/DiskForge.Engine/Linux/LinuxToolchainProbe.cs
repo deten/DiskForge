@@ -25,7 +25,13 @@ public static class LinuxToolchainProbe
     };
 
     /// <summary>Extra binaries the format/verify path needs beyond mkfs itself.</summary>
-    private static readonly string[] SupportTools = { "blkid", "wipefs", "partprobe", "udevadm" };
+    /// <summary>
+    /// Tools looked for alongside the mkfs binaries. blkid verifies a format; e2fsck and dumpe2fs are
+    /// the independent judges the test suite runs over ext images DiskForge wrote. Recording whether
+    /// they were actually seen is what lets a test skip, rather than fail, on a box whose WSL is
+    /// installed but will not start.
+    /// </summary>
+    private static readonly string[] SupportTools = { "blkid", "wipefs", "partprobe", "udevadm", "e2fsck", "dumpe2fs" };
 
     private static readonly TimeSpan DistroTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan SweepBudget = TimeSpan.FromSeconds(30);

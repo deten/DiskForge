@@ -46,8 +46,16 @@ public sealed class OpResult
     public string? Error { get; init; }
     public TimeSpan Elapsed { get; init; }
 
-    public static OpResult Ok(TimeSpan elapsed) => new() { Success = true, Elapsed = elapsed };
-    public static OpResult Failed(string error) => new() { Success = false, Error = error };
+    /// <summary>
+    /// Output the user should see even though the operation succeeded: a filesystem check's findings,
+    /// a tool's own summary. Most operations have nothing to say here and leave it null.
+    /// </summary>
+    public string? Report { get; init; }
+
+    public static OpResult Ok(TimeSpan elapsed, string? report = null)
+        => new() { Success = true, Elapsed = elapsed, Report = report };
+    public static OpResult Failed(string error, string? report = null)
+        => new() { Success = false, Error = error, Report = report };
 }
 
 public sealed class VerifyResult

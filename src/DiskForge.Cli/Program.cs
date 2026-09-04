@@ -34,6 +34,13 @@ if (args.Length > 0 && string.Equals(args[0], "resize", StringComparison.Ordinal
     return code;
 }
 
+if (args.Length > 0 && string.Equals(args[0], "check", StringComparison.OrdinalIgnoreCase))
+{
+    var code = await CheckCommand.RunAsync(args);
+    Log.CloseAndFlush();
+    return code;
+}
+
 var state = new SystemInspector().Capture();
 
 Console.WriteLine();

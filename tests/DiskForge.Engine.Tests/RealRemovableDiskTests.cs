@@ -287,6 +287,58 @@ public class RealRemovableDiskTests
         Assert.Equal(payload, File.ReadAllText(Path.Combine($"{letter}:\\", "payload.txt")));
     }
 
+    /// <summary>
+    /// chkdsk on real removable media: a read-only check and then a repair, each proving the volume is
+    /// still mounted and still holds its file afterwards. The repair route (chkdsk /f /x) dismounts the
+    /// volume, and removable media is where dismount-and-remount behaves differently from a VHDX.
+    /// </summary>
+    [RequiresNominatedDiskFact]
+    public async Task CheckAndRepair_OnRealRemovableHardware_LeaveTheVolumeIntact()
+    {
+        var inspector = new SystemInspector();
+        var disk = Target(inspector.Capture());
+
+        var format = new FormatVolumeOperation(new FormatVolumeSettings
+        {
+            DiskNumber = disk.Number,
+            Scope = FormatScope.CleanWholeDisk,
+            PartitionScheme = PartitionSchemeChoice.Gpt,
+            FileSystem = FileSystemType.Ntfs,
+            Label = "DF CHKDSK"
+        }, inspector);
+        var formatted = await format.ExecuteAsync(new Progress<OpProgress>(), CancellationToken.None);
+        Assert.True(formatted.Success, formatted.Error);
+
+        var part = inspector.Capture(probeLinuxToolchain: false).FindDisk(disk.Number)!
+            .Partitions.Where(p => !p.IsUnallocated && p.Volume is not null)
+            .OrderByDescending(p => p.SizeBytes).First();
+        var canary = Path.Combine($"{part.DriveLetter!.TrimEnd(':', '\\')}:\\", "canary.txt");
+        File.WriteAllText(canary, "survives check and repair");
+
+        foreach (var repair in new[] { false, true })
+        {
+            var op = new CheckFilesystemOperation(new CheckFilesystemSettings
+            {
+                DiskNumber = disk.Number,
+                PartitionNumber = part.PartitionNumber!.Value,
+                OffsetBytes = part.OffsetBytes,
+                DriveLetter = part.DriveLetter,
+                Repair = repair
+            }, inspector);
+
+            var v = op.Validate(inspector.Capture(probeLinuxToolchain: false));
+            Assert.True(v.IsValid, string.Join(" ", v.Errors));
+
+            var result = await op.ExecuteAsync(new Progress<OpProgress>(), CancellationToken.None);
+            Assert.True(result.Success, $"{(repair ? "repair" : "check")}: {result.Error}\n{result.Report}");
+            Assert.False(string.IsNullOrWhiteSpace(result.Report));
+
+            var verify = await op.VerifyAsync();
+            Assert.True(verify.Verified, string.Join(" ", verify.Findings));
+            Assert.Equal("survives check and repair", File.ReadAllText(canary));
+        }
+    }
+
     private static (int ExitCode, string Output) RunFsck(string windowsPath)
     {
         var distro = LinuxToolchainProbe.Get().Distros
